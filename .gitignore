@@ -1,4 +1,4 @@
 .venv/
 .ipynb_checkpoints/
 .env
-__pycache__/git status
+__pycache__/
