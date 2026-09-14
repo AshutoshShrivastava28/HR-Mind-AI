@@ -68,7 +68,9 @@ Observe + Improve
 
 ## 3. Simple Architecture
 
-![System architecture](docs/architecture.png)
+<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/6c9373f6-535b-4bfd-9cdd-bf5cb82ccbc3" />
+
+
 
 ```text
 Employee / HR User
