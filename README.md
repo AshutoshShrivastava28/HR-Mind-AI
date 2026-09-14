@@ -68,7 +68,8 @@ Observe + Improve
 
 ## 3. Simple Architecture
 
-<img width="1536" height="1024" alt="architecture" src="https://github.com/user-attachments/assets/6420adb2-827c-4868-b918-d91b5c28bb0e" />
+<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/6c9373f6-535b-4bfd-9cdd-bf5cb82ccbc3" />
+
 
 
 ```text
