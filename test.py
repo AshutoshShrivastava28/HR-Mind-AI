@@ -1,7 +1,7 @@
-from app.core.config import get_settings
+from app.services.ingestion import load_file, chunk_documents
+from pathlib import Path
 
-settings = get_settings()
+docs = load_file(Path("data/sample_kb/hr_operations_runbook.md"))
+chunked_docs = chunk_documents(docs)
 
-print(f"App Name : {settings.app_name}")
-print(f"Open AI Key : {settings.openai_api_key}")
-print(f"Open AI Model : {settings.openai_model}")
+print(len(chunked_docs))

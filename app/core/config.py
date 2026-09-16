@@ -1,6 +1,7 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -8,13 +9,12 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 class Settings(BaseSettings):
     app_name: str = "HR Mind AI"
     app_env: str = "development"
-    openai_api_key: str = ""
+    groq_api_key: str = ""
     tavily_api_key: str = ""
     pinecone_api_key: str = ""
     pinecone_index_name: str = "fde-hr-policy-rag"
     pinecone_namespace: str = "company-hr-kb"
-    embedding_model: str = "text-embedding-3-small"
-    openai_model: str = "gpt-4o-mini"
+    embedding_model: str = "all-minilm-l6-v2"
     top_k: int = 4
     max_retries: int = 1
     admin_api_key: str = "change-me-in-production"
@@ -26,4 +26,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    return Settings()
     return Settings()
