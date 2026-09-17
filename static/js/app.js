@@ -44,9 +44,12 @@ function addMessage(role, text, source = "", citations = []) {
     </div>
   `
     : "";
-  wrap.innerHTML = `<div class="avatar">AI</div><div class="bubble">${formatText(text)}${source ? `<div class="answer-source">Source: ${escapeHtml(source)}</div>` : ""}${citeHtml}</div>`;
+  wrap.innerHTML = `<div class="avatar">AI</div><div class="bubble">${role === "user" ? escapeHtml(text).replace(/\n/g, "<br>") : formatText(text)}${source ? `<div class="answer-source">Source: ${escapeHtml(source)}</div>` : ""}${citeHtml}</div>`;
   chat.appendChild(wrap);
-  chat.scrollTop = chat.scrollHeight;
+  chat.scrollTo({
+    top: chat.scrollHeight,
+    behavior: "smooth",
+  });
 }
 function renderTrace(items = [], running = false) {
   trace.innerHTML = items.length

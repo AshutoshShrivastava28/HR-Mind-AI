@@ -1,13 +1,14 @@
 import time
 
-from pinecone import Pinecone, ServerlessSpec
-from langchain_huggingface import HuggingFaceEmbeddings
+import numpy as np
+from fastembed import TextEmbedding
+from langchain_core.embeddings import Embeddings
 from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone, ServerlessSpec
 
 from app.core.config import get_settings
 
 settings = get_settings()
-
 
 _embeddings = None
 _vectorstore = None
@@ -19,6 +20,26 @@ EMBEDDING_DIMENSIONS = {
     "text-embedding-ada-002": 1536,
     "all-minilm-l6-v2": 384,
 }
+
+
+class FastEmbedEmbeddings(Embeddings):
+    def __init__(self):
+        self.model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+    def _normalize(self, vector):
+        vector = np.asarray(vector, dtype=np.float32)
+        norm = np.linalg.norm(vector)
+        if norm == 0:
+            return vector.tolist()
+        return (vector / norm).tolist()
+
+    def embed_documents(self, texts):
+        vectors = self.model.embed(texts)
+        return [self._normalize(v) for v in vectors]
+
+    def embed_query(self, text):
+        vector = next(self.model.embed([text]))
+        return self._normalize(vector)
 
 
 def get_embedding_dimension(model_name: str | None = None) -> int:
@@ -55,10 +76,7 @@ def get_embeddings():
     global _embeddings
 
     if _embeddings is None:
-        _embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            encode_kwargs={"normalize_embeddings": True},
-        )
+        _embeddings = FastEmbedEmbeddings()
 
     return _embeddings
 
