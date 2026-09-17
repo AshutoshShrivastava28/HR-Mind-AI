@@ -1,18 +1,26 @@
-# Enterprise HR Policy & Employee Support Agentic RAG Copilot
+# HR Mind AI
 
-An end-to-end Forward Deployed Engineer (FDE) project that converts an Agentic RAG workflow into a deployable internal HR product using LangGraph, FastAPI, Pinecone, OpenAI, Tavily, HTML, CSS, and JavaScript.
+An end-to-end Agentic RAG HR knowledge copilot that turns company HR policies and employee-support workflows into a deployable AI application using LangGraph, FastAPI, Pinecone, Groq, Tavily, FastEmbed, Docker, and JavaScript.
+
+## 🚀 Live Demo
+
+**Live Application:** http://168.144.190.198:8000
+
+> The application is deployed as a Docker container on a DigitalOcean Droplet.
+
+---
 
 ## 1. Business Problem
 
 ### Customer
 
-XYZ, a fictional 5,000-employee retail company.
+XYZ Company, a fictional 5,000-employee retail company.
 
 ### Problem
 
 The HR team maintains many internal documents: leave policies, remote-work rules, payroll guidance, benefits information, onboarding procedures, conduct policies, and HR operations runbooks.
 
-Employees still send repetitive HR questions because they do not know where the correct policy lives, keyword search returns too many documents, generic chatbots may invent policy details, internal documents may not cover current public regulations, and some questions require fresh external information.
+Employees still ask repetitive HR questions because they may not know where the correct policy lives, keyword search can return too many documents, generic chatbots can invent policy details, internal documents may not contain current public information, and some questions require fresh external information.
 
 ### Example
 
@@ -26,23 +34,25 @@ Another employee asks:
 
 > “What are the latest public holiday rules in Bangladesh?”
 
-The internal KB may not contain current public information. The system should recognize weak private evidence, use external search, grade the evidence, and clearly identify the answer as external information requiring HR validation.
+The internal knowledge base may not contain current public information. The system can recognize insufficient private evidence, use external search, evaluate the evidence, and clearly identify the information as external and requiring HR validation.
 
 ### Business Goal
 
-Build a secure HR Policy Copilot that:
+Build an HR Policy Copilot that:
 
 1. Searches trusted private HR knowledge first.
 2. Checks whether retrieved evidence is sufficient.
 3. Uses web search only when private knowledge is insufficient.
-4. Rewrites weak queries and retries.
+4. Rewrites weak queries and retries when necessary.
 5. Generates grounded answers.
 6. Shows the LangGraph decision path for transparency and debugging.
-7. Lets authorized HR staff add new company documents.
+7. Allows authorized HR staff to add new company documents.
 
-## 2. Why This Is an FDE Project
+---
 
-A Forward Deployed Engineer does more than build an LLM notebook. The FDE translates a customer problem into a usable product:
+## 2. Why This Is an FDE-Style Project
+
+A Forward Deployed Engineer does more than build an LLM notebook. The role connects a customer problem to a usable production-oriented solution:
 
 ```text
 Customer Problem
@@ -66,30 +76,46 @@ Deployment
 Observe + Improve
 ```
 
-## 3. Simple Architecture
+---
 
-<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/6c9373f6-535b-4bfd-9cdd-bf5cb82ccbc3" />
+## 3. Architecture
 
-
+<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/6c9373f6-5354-4bfd-9cdd-bf5cb82ccbc3" />
 
 ```text
 Employee / HR User
         ↓
-HTML/CSS/JavaScript Web UI
+HTML / CSS / JavaScript Web UI
         ↓ POST /api/chat
 FastAPI
         ↓
 LangGraph Agentic RAG Controller
         ↓
- ┌───────────────┬─────────────────┐
- ↓               ↓
-Private HR KB    Tavily Web Search
-Pinecone         (fallback only)
- └───────┬───────┘
-         ↓
-OpenAI LLM
+ ┌──────────────────┐
+ ↓                  ↓
+Private HR KB       Tavily Web Search
+Pinecone            (fallback only)
+ └─────────┬────────┘
+           ↓
+Groq LLM
 Grounded Answer
 ```
+
+### Deployment Architecture
+
+```text
+GitHub
+   ↓
+DigitalOcean Droplet
+   ↓
+Docker Container
+   ↓
+FastAPI + LangGraph
+   ↓
+Groq + Pinecone + Tavily
+```
+
+---
 
 ## 4. Agentic RAG Workflow
 
@@ -126,41 +152,54 @@ Generate from KB   [4] Tavily Web Search
                     Insufficient Evidence
 ```
 
+This workflow is designed to prefer private company knowledge and use external web information only when the private evidence is insufficient.
+
+---
+
 ## 5. Technology Stack
 
-| Layer           | Technology                      | Purpose                                        |
-| --------------- | ------------------------------- | ---------------------------------------------- |
-| Agent workflow  | LangGraph                       | Stateful routing and conditional decisions     |
-| LLM             | OpenAI                          | Routing, grading, rewriting, answer generation |
-| Embeddings      | OpenAI `text-embedding-3-small` | Vector embeddings                              |
-| Vector DB       | Pinecone                        | Private enterprise HR knowledge base           |
-| External search | Tavily                          | Fallback when company HR KB is insufficient    |
-| API             | FastAPI                         | Backend and REST endpoints                     |
-| Frontend        | HTML/CSS/JavaScript             | Employee-facing interface                      |
-| Audit           | SQLite                          | Decision-path logging                          |
-| Packaging       | Docker                          | Reproducible deployment                        |
+| Layer           | Technology                     | Purpose                                                           |
+| --------------- | ------------------------------ | ----------------------------------------------------------------- |
+| Agent workflow  | LangGraph                      | Stateful routing and conditional decisions                        |
+| LLM             | Groq (`openai/gpt-oss-120b`)   | Routing, evidence grading, query rewriting, and answer generation |
+| Embeddings      | FastEmbed (`all-MiniLM-L6-v2`) | Lightweight local text embeddings                                 |
+| Vector DB       | Pinecone                       | Persistent HR knowledge base and similarity search                |
+| External search | Tavily                         | Web fallback when private HR evidence is insufficient             |
+| API             | FastAPI                        | Backend API and application server                                |
+| Frontend        | HTML / CSS / JavaScript        | Employee-facing web interface                                     |
+| Audit           | SQLite                         | Decision-path logging                                             |
+| Packaging       | Docker                         | Reproducible application packaging                                |
+| Deployment      | DigitalOcean Droplet           | Hosting the Dockerized application                                |
+
+---
 
 ## 6. Project Structure
 
 ```text
-Enterprise-HR-Policy-Agentic-RAG-Copilot/
+HR-Mind-AI/
 ├── app/
-│   ├── api/routes.py
-│   ├── core/config.py
-│   ├── core/logging.py
-│   ├── rag/state.py
-│   ├── rag/vectorstore.py
-│   ├── rag/workflow.py
-│   ├── services/audit.py
-│   ├── services/ingestion.py
+│   ├── api/
+│   │   └── routes.py
+│   ├── core/
+│   │   ├── config.py
+│   │   └── logging.py
+│   ├── rag/
+│   │   ├── state.py
+│   │   ├── vectorstore.py
+│   │   └── workflow.py
+│   ├── services/
+│   │   ├── audit.py
+│   │   └── ingestion.py
 │   └── main.py
-├── data/sample_kb/
-│   ├── company_hr_handbook.md
-│   └── hr_operations_runbook.md
+├── data/
+│   └── sample_kb/
 ├── static/
-│   ├── css/style.css
-│   └── js/app.js
-├── templates/index.html
+│   ├── css/
+│   │   └── style.css
+│   └── js/
+│       └── app.js
+├── templates/
+│   └── index.html
 ├── uploads/
 ├── Dockerfile
 ├── ingest_sample_kb.py
@@ -169,44 +208,43 @@ Enterprise-HR-Policy-Agentic-RAG-Copilot/
 └── README.md
 ```
 
-## 7. Setup
+---
+
+## 7. Local Setup
 
 ### Step 1 — Create and activate a virtual environment
 
 ```bash
-python -m venv venv
+python -m venv .venv
 ```
 
-Windows:
-
-```bash
-venv\Scripts\activate
-```
-
-macOS/Linux:
-
-```bash
-source venv/bin/activate
+```powershell
+.venv\Scripts\activate
 ```
 
 ### Step 2 — Install dependencies
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-### Step 3 — Configure environment
+### Step 3 — Configure environment variables
 
-Copy `.env.example` to `.env` and add your keys.
+Create a `.env` file and add your API keys and configuration.
 
 ```env
-OPENAI_API_KEY=your_openai_api_key_here
+GROQ_API_KEY=your_groq_api_key_here
 TAVILY_API_KEY=your_tavily_api_key_here
 PINECONE_API_KEY=your_pinecone_api_key_here
+
 PINECONE_INDEX_NAME=fde-hr-policy-rag
 PINECONE_NAMESPACE=company-hr-kb
-OPENAI_MODEL=gpt-4o-mini
-EMBEDDING_MODEL=text-embedding-3-small
+
+EMBEDDING_MODEL=all-minilm-l6-v2
+
+TOP_K=4
+MAX_RETRIES=1
+
 ADMIN_API_KEY=change-me-in-production
 APP_ENV=development
 ```
@@ -223,13 +261,109 @@ python ingest_sample_kb.py
 python run.py
 ```
 
-Open `http://127.0.0.1:8080` and FastAPI docs at `http://127.0.0.1:8080/docs`.
+Open:
 
-## 8. Classroom Demo Scenarios
+```text
+http://127.0.0.1:8000
+```
+
+FastAPI documentation:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+---
+
+## 8. Docker
+
+Build the image:
+
+```bash
+docker build -t hr-mind-ai .
+```
+
+Run the application:
+
+```bash
+docker run -d --restart unless-stopped \
+  --name hr-mind-ai \
+  -p 8000:10000 \
+  --env-file .env \
+  hr-mind-ai
+```
+
+The container listens internally on port `10000` and is exposed on port `8000` on the host.
+
+---
+
+## 9. Deployment
+
+The application is deployed on a DigitalOcean Droplet using Docker.
+
+### Deployment flow
+
+```text
+GitHub Repository
+       ↓
+DigitalOcean Droplet
+       ↓
+Docker Image
+       ↓
+Docker Container
+       ↓
+FastAPI / LangGraph
+       ↓
+Groq + Pinecone + Tavily
+```
+
+### Live Application
+
+**http://168.144.190.198:8000**
+
+The Docker container is configured to restart automatically using:
+
+```text
+--restart unless-stopped
+```
+
+This allows the application to continue running when the local development machine is offline or disconnected.
+
+---
+
+## 10. Document Ingestion
+
+Authorized HR users can upload PDF, TXT, Markdown, or DOCX documents from the web interface.
+
+The ingestion flow is:
+
+```text
+HR Document
+    ↓
+Upload
+    ↓
+Text Extraction
+    ↓
+Chunking
+    ↓
+FastEmbed Embeddings
+    ↓
+Pinecone
+    ↓
+Persistent HR Knowledge
+```
+
+The original uploaded file is used as the ingestion input. The searchable knowledge used by the RAG system is stored in Pinecone.
+
+---
+
+## 11. Classroom / Portfolio Demo Scenarios
 
 ### Demo A — Private KB Success
 
-Ask: **How many annual leave days do employees receive?**
+Ask:
+
+> **How many annual leave days do employees receive?**
 
 Expected path:
 
@@ -242,15 +376,28 @@ Generate from Private KB
 
 ### Demo B — Company Policy Question
 
-Ask: **How many days per week can I work remotely?**
+Ask:
 
-Expected result: answer from the internal HR handbook, without web search.
+> **How many days per week can I work remotely?**
+
+Expected result:
+
+```text
+Router
+→ Private KB Retrieval
+→ Good Evidence
+→ Answer from HR Policy
+```
+
+No web search should be required when the company knowledge base already contains sufficient evidence.
 
 ### Demo C — External / Current Information
 
-Ask: **What are the latest public holiday rules in Bangladesh?**
+Ask:
 
-Expected path when internal HR documents are insufficient:
+> **What are the latest public holiday rules in Italy?**
+
+Expected path when the internal HR documents are insufficient:
 
 ```text
 Router → KB
@@ -258,15 +405,71 @@ Private KB Retrieval
 KB Grade → WEAK
 Tavily Search
 Web Grade → GOOD
-Web Answer
+Generate Web Answer
 ```
 
 ### Demo D — Weak Query Rewrite
 
-Ask an ambiguous HR question such as: **What happens if mine is wrong?**
+Ask an ambiguous question such as:
 
-If neither private nor web evidence is sufficient, the workflow can rewrite the query, retry the KB, and eventually stop with insufficient evidence rather than hallucinating.
+> **What happens if mine is wrong?**
 
-## 9. What Changed From the IT Support Reference
+If neither private nor web evidence is sufficient, the workflow can rewrite the query, retry the private knowledge base, and eventually return an insufficient-evidence response rather than fabricating a policy answer.
 
-The application structure, graph topology, API shape, retrieval logic, ingestion layer, audit layer, Docker setup, and frontend behavior remain the same. Only domain-specific elements were changed: HR prompts, HR configuration names, UI wording, example questions, sample documents, and documentation.
+---
+
+## 12. Observability
+
+The application exposes a live **Agent Trace** in the frontend.
+
+Example:
+
+```text
+Route question
+      ↓
+Retrieve private KB
+      ↓
+Grade evidence
+      ↓
+Web fallback / query rewrite
+      ↓
+Generate grounded answer
+```
+
+The trace makes LangGraph decisions visible during both debugging and demonstrations.
+
+---
+
+## 13. Key Features
+
+- Agentic RAG with conditional LangGraph routing
+- Private knowledge-first retrieval
+- Evidence grading before answer generation
+- Tavily web fallback
+- Query rewriting and retry logic
+- Grounded answer generation
+- Pinecone vector search
+- FastEmbed local embeddings
+- HR document ingestion
+- FastAPI backend
+- Live streaming Agent Trace
+- Source and citation display
+- Dockerized deployment
+- DigitalOcean hosting
+- Responsive dark enterprise-style frontend
+- SQLite audit logging
+
+---
+
+This project applies an Agentic RAG reference architecture to an HR employee-support use case.
+
+## 14. Future Improvements
+
+- Authentication and role-based HR access
+- Persistent object storage for original uploaded documents
+- HTTPS and a custom domain
+- Better document versioning and deletion
+- More detailed audit dashboards
+- Production monitoring and alerting
+
+---
