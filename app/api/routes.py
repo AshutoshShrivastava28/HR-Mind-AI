@@ -44,8 +44,9 @@ def chat(payload: ChatRequest):
             }
 
             final_state = {}
-
+            print("CHAT: before agent_graph.stream()", flush=True)
             for update in agent_graph.stream(initial, stream_mode="updates"):
+                print(f"CHAT: received update → {update}", flush=True)
                 for node_name, node_update in update.items():
                     final_state.update(node_update)
 
