@@ -671,10 +671,6 @@ body {
 }
 
 @media (max-width: 760px) {
-  .shell {
-    display: block;
-  }
-
   .sidebar {
     display: none;
   }
@@ -695,6 +691,28 @@ body {
 
   .send-btn {
     padding: 0 14px;
+  }
+  html,
+  body {
+    height: auto;
+    overflow: auto;
+  }
+
+  .shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    display: block;
+  }
+
+  .main {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .chat-area {
+    min-height: 0;
+    overflow-y: visible;
   }
 }
 
