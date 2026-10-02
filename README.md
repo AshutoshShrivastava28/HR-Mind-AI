@@ -80,7 +80,7 @@ Observe + Improve
 
 ## 3. Architecture
 
-<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/6c9373f6-5354-4bfd-9cdd-bf5cb82ccbc3" />
+![Architecture](docs/Architecture.png)
 
 ```text
 Employee / HR User
