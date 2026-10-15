@@ -5,9 +5,53 @@ const trace = document.getElementById("trace");
 const sourceUsed = document.getElementById("sourceUsed");
 const submitButton = form.querySelector('button[type="submit"]');
 
-let requestInProgress = false;
+const historyModal = document.getElementById("historyModal");
+const historyList = document.getElementById("historyList");
+const historyStatus = document.getElementById("historyStatus");
+const historyToggle = document.getElementById("historyToggle");
+const newChatBtn = document.getElementById("newChatBtn");
+const historyNewChat = document.getElementById("historyNewChat");
+const closeHistory = document.getElementById("closeHistory");
+const refreshHistoryBtn = document.getElementById("refreshHistory");
+const conversationActionModal = document.getElementById(
+  "conversationActionModal",
+);
+const conversationActionTitle = document.getElementById(
+  "conversationActionTitle",
+);
+const conversationActionDescription = document.getElementById(
+  "conversationActionDescription",
+);
+const conversationActionForm = document.getElementById(
+  "conversationActionForm",
+);
+const conversationRenameFields = document.getElementById(
+  "conversationRenameFields",
+);
+const conversationActionInput = document.getElementById(
+  "conversationActionInput",
+);
+const conversationActionError = document.getElementById(
+  "conversationActionError",
+);
+const confirmConversationAction = document.getElementById(
+  "confirmConversationAction",
+);
+const closeConversationAction = document.getElementById(
+  "closeConversationAction",
+);
+const cancelConversationAction = document.getElementById(
+  "cancelConversationAction",
+);
 
-// Human-readable names for backend source identifiers.
+let pendingConversationAction = null;
+let actionSaving = false;
+const initialWelcomeMarkup = chat.innerHTML;
+
+let requestInProgress = false;
+let currentConversationId = null;
+let conversations = [];
+
 const SOURCE_LABELS = {
   private_kb: "Company Knowledge Base",
   web_search: "External Web Search",
@@ -18,7 +62,6 @@ const SOURCE_LABELS = {
   error: "Error",
 };
 
-// Human-readable names for LangGraph nodes.
 const TRACE_NODE_LABELS = {
   route_question: "Route question",
   retrieve_kb: "Retrieve private knowledge base",
@@ -51,9 +94,7 @@ function formatSource(value = "") {
     .trim()
     .toLowerCase();
 
-  if (!key) {
-    return "Unknown";
-  }
+  if (!key) return "Unknown";
 
   return SOURCE_LABELS[key] || String(value).replace(/_/g, " ");
 }
@@ -64,27 +105,25 @@ function formatTraceNode(value = "") {
   return TRACE_NODE_LABELS[key] || key.replace(/_/g, " ");
 }
 
-// Remove machine-specific directory paths from document titles.
 function cleanCitationTitle(citation = {}) {
-  const rawTitle = String(citation.title || citation.url || "Source").trim();
+  const title = String(citation.title || citation.url || "Source").trim();
 
   const looksLikeLocalPath =
     citation.type === "private_kb" ||
-    /^[a-z]:[\\/]/i.test(rawTitle) ||
-    rawTitle.startsWith("/") ||
-    rawTitle.includes("\\");
+    /^[a-z]:[\\/]/i.test(title) ||
+    title.startsWith("/") ||
+    title.includes("\\");
 
   if (looksLikeLocalPath) {
     return (
-      rawTitle.replace(/\\/g, "/").split("/").filter(Boolean).pop() ||
+      title.replace(/\\/g, "/").split("/").filter(Boolean).pop() ||
       "Company document"
     );
   }
 
-  return rawTitle;
+  return title;
 }
 
-// Allow only HTTP and HTTPS links in source cards.
 function safeExternalUrl(value) {
   if (typeof value !== "string" || !value.trim()) {
     return "";
@@ -93,7 +132,7 @@ function safeExternalUrl(value) {
   try {
     const url = new URL(value, window.location.origin);
 
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
+    if (!["http:", "https:"].includes(url.protocol)) {
       return "";
     }
 
@@ -113,7 +152,31 @@ function formatText(value = "") {
   return DOMPurify.sanitize(marked.parse(text));
 }
 
-// Scroll the chat panel on desktop and the page on mobile.
+async function apiRequest(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    let message = `Request failed (${response.status}).`;
+
+    try {
+      const data = await response.json();
+      message = data.detail || message;
+    } catch {
+      // Keep the generic error message.
+    }
+
+    throw new Error(message);
+  }
+
+  return response.json();
+}
+
 function scrollLatestIntoView(element = chat) {
   const styles = window.getComputedStyle(chat);
 
@@ -148,30 +211,20 @@ function addMessage(role, text, source = "", citations = []) {
     ? `
       <div class="citations">
         <strong>Sources</strong>
-
         <div class="source-list">
           ${citationItems
             .map((citation) => {
               const title = escapeHtml(cleanCitationTitle(citation || {}));
-
               const url = safeExternalUrl(citation?.url);
 
               return `
               <div class="source-card">
-                <span
-                  class="source-icon"
-                  aria-hidden="true"
-                >↗</span>
-
+                <span class="source-icon" aria-hidden="true">↗</span>
                 ${
                   url
-                    ? `
-                      <a
-                        href="${escapeHtml(url)}"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >${title}</a>
-                    `
+                    ? `<a href="${escapeHtml(url)}"
+                         target="_blank"
+                         rel="noopener noreferrer">${title}</a>`
                     : `<span>${title}</span>`
                 }
               </div>
@@ -189,18 +242,13 @@ function addMessage(role, text, source = "", citations = []) {
       : formatText(text);
 
   const sourceHtml = source
-    ? `
-      <div class="answer-source" title="Answer source">
-        Source: ${escapeHtml(formatSource(source))}
-      </div>
-    `
+    ? `<div class="answer-source">Source: ${escapeHtml(formatSource(source))}</div>`
     : "";
 
   wrap.innerHTML = `
     <div class="avatar" aria-hidden="true">
       ${role === "user" ? "You" : "AI"}
     </div>
-
     <div class="bubble">
       ${messageContent}
       ${sourceHtml}
@@ -209,19 +257,13 @@ function addMessage(role, text, source = "", citations = []) {
   `;
 
   chat.appendChild(wrap);
-
   scrollLatestIntoView(wrap);
 
   return wrap;
 }
 
-// Render the live LangGraph trace in the right panel.
 function renderTrace(items = [], running = false) {
   const safeItems = Array.isArray(items) ? items : [];
-
-  trace.setAttribute("role", "status");
-  trace.setAttribute("aria-live", "polite");
-  trace.setAttribute("aria-relevant", "additions text");
 
   trace.innerHTML = safeItems.length
     ? safeItems
@@ -230,11 +272,9 @@ function renderTrace(items = [], running = false) {
 
           return `
           <div class="trace-item ${isActive ? "active" : "completed"}">
-            <span
-              class="trace-dot"
-              aria-hidden="true"
-            >${isActive ? "•" : "✓"}</span>
-
+            <span class="trace-dot" aria-hidden="true">
+              ${isActive ? "•" : "✓"}
+            </span>
             <span>${escapeHtml(String(item))}</span>
           </div>
         `;
@@ -248,7 +288,6 @@ function setRequestBusy(isBusy) {
 
   question.disabled = isBusy;
   submitButton.disabled = isBusy;
-
   submitButton.textContent = isBusy ? "Thinking…" : "Ask Agent";
 
   form.setAttribute("aria-busy", String(isBusy));
@@ -256,186 +295,606 @@ function setRequestBusy(isBusy) {
   document.querySelectorAll(".example").forEach((button) => {
     button.disabled = isBusy;
   });
+
+  newChatBtn.disabled = isBusy;
+  historyNewChat.disabled = isBusy;
 }
+
+function setHistoryStatus(message = "", isError = false) {
+  historyStatus.textContent = message;
+  historyStatus.classList.toggle("error", isError);
+}
+
+function resetChatUI() {
+  chat.innerHTML = initialWelcomeMarkup;
+
+  document.getElementById("chatExamples")?.classList.add("hidden");
+
+  renderTrace([], false);
+  sourceUsed.textContent = "—";
+
+  question.value = "";
+  question.disabled = false;
+  submitButton.disabled = false;
+
+  setTimeout(() => question.focus(), 0);
+}
+
+function closeHistoryModal() {
+  historyModal.classList.add("hidden");
+}
+
+function openHistoryModal() {
+  historyModal.classList.remove("hidden");
+  refreshHistory();
+}
+
+function formatDate(value) {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+// ---------- Conversation History ----------
+
+async function refreshHistory(showStatus = true) {
+  if (showStatus) {
+    setHistoryStatus("Loading conversations…");
+  }
+
+  try {
+    const data = await apiRequest("/api/conversations");
+
+    conversations = Array.isArray(data.conversations) ? data.conversations : [];
+
+    renderHistory();
+
+    setHistoryStatus(
+      conversations.length
+        ? `${conversations.length} saved conversation${conversations.length === 1 ? "" : "s"}`
+        : "No saved conversations yet.",
+    );
+
+    return conversations;
+  } catch (error) {
+    if (showStatus) {
+      setHistoryStatus(error.message, true);
+    }
+
+    historyList.innerHTML =
+      '<div class="empty">Could not load conversation history.</div>';
+
+    throw error;
+  }
+}
+
+function renderHistory() {
+  if (!conversations.length) {
+    historyList.innerHTML =
+      '<div class="empty">No saved conversations yet. Start a new chat to begin.</div>';
+
+    return;
+  }
+
+  historyList.innerHTML = conversations
+    .map((item) => {
+      const id = escapeHtml(item.id);
+      const title = escapeHtml(item.title || "New chat");
+
+      const count = Number(item.message_count || 0);
+
+      const messageLabel = `${count} message${count === 1 ? "" : "s"}`;
+
+      const updated = formatDate(item.updated_at);
+
+      const isCurrent = item.id === currentConversationId;
+
+      return `
+      <div class="history-item ${isCurrent ? "current" : ""}">
+        <button
+          type="button"
+          class="history-open"
+          data-history-action="open"
+          data-id="${id}"
+          title="Open ${title}"
+        >
+          <span class="history-title">${title}</span>
+          <span class="history-meta">
+            ${messageLabel}${updated ? ` · ${escapeHtml(updated)}` : ""}
+          </span>
+        </button>
+
+        <div class="history-actions">
+          <button
+            type="button"
+            class="history-action"
+            data-history-action="rename"
+            data-id="${id}"
+          >Rename</button>
+
+          <button
+            type="button"
+            class="history-action delete"
+            data-history-action="delete"
+            data-id="${id}"
+          >Delete</button>
+        </div>
+      </div>
+    `;
+    })
+    .join("");
+}
+
+async function createNewChat() {
+  if (requestInProgress) return;
+
+  try {
+    const data = await apiRequest("/api/conversations", {
+      method: "POST",
+    });
+
+    const conversation = data.conversation;
+
+    if (!conversation?.id) {
+      throw new Error("The server did not return a conversation ID.");
+    }
+
+    currentConversationId = conversation.id;
+
+    resetChatUI();
+    closeHistoryModal();
+
+    await refreshHistory(false);
+  } catch (error) {
+    addMessage(
+      "assistant",
+      `**Couldn't create a new conversation.** ${error.message}`,
+    );
+  }
+}
+
+async function openConversation(conversationId) {
+  try {
+    setHistoryStatus("Opening conversation…");
+
+    const data = await apiRequest(
+      `/api/conversations/${encodeURIComponent(conversationId)}`,
+    );
+
+    currentConversationId = data.conversation.id;
+
+    const messages = Array.isArray(data.messages) ? data.messages : [];
+
+    chat.innerHTML = "";
+
+    if (!messages.length) {
+      resetChatUI();
+    } else {
+      messages.forEach((message) => {
+        addMessage(
+          message.role,
+          message.content,
+          message.source_used || "",
+          message.citations || [],
+        );
+      });
+
+      document.getElementById("chatExamples")?.classList.remove("hidden");
+
+      const lastAssistant = [...messages]
+        .reverse()
+        .find((message) => message.role === "assistant");
+
+      if (lastAssistant) {
+        renderTrace(lastAssistant.trace || [], false);
+        sourceUsed.textContent = formatSource(lastAssistant.source_used || "");
+      } else {
+        renderTrace([], false);
+        sourceUsed.textContent = "—";
+      }
+    }
+
+    closeHistoryModal();
+
+    await refreshHistory(false);
+
+    scrollLatestIntoView();
+  } catch (error) {
+    setHistoryStatus(error.message, true);
+  }
+}
+
+function openConversationAction(type, conversationId) {
+  const conversation = conversations.find((item) => item.id === conversationId);
+
+  if (!conversation || actionSaving) return;
+
+  const isRename = type === "rename";
+
+  pendingConversationAction = {
+    type,
+    conversationId,
+  };
+
+  conversationActionTitle.textContent = isRename
+    ? "Rename conversation"
+    : "Delete conversation?";
+
+  conversationActionDescription.textContent = isRename
+    ? "Choose a name that's easy to recognize later."
+    : `Delete "${conversation.title || "New chat"}" and all its saved messages? This action cannot be undone.`;
+
+  conversationRenameFields.hidden = !isRename;
+
+  conversationActionInput.value = isRename ? conversation.title || "" : "";
+
+  conversationActionError.textContent = "";
+
+  confirmConversationAction.textContent = isRename
+    ? "Save changes"
+    : "Delete conversation";
+
+  confirmConversationAction.classList.toggle("danger", !isRename);
+
+  conversationActionModal.classList.remove("hidden");
+
+  setTimeout(() => {
+    if (isRename) {
+      conversationActionInput.focus();
+      conversationActionInput.select();
+    } else {
+      confirmConversationAction.focus();
+    }
+  }, 0);
+}
+
+function closeConversationActionDialog() {
+  if (actionSaving) return;
+
+  conversationActionModal.classList.add("hidden");
+  pendingConversationAction = null;
+  conversationActionError.textContent = "";
+}
+
+function renameConversation(conversationId) {
+  openConversationAction("rename", conversationId);
+}
+
+function deleteConversation(conversationId) {
+  openConversationAction("delete", conversationId);
+}
+
+conversationActionForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  if (!pendingConversationAction || actionSaving) return;
+
+  const { type, conversationId } = pendingConversationAction;
+
+  const isRename = type === "rename";
+  const title = conversationActionInput.value.trim();
+
+  if (isRename && !title) {
+    conversationActionError.textContent = "Please enter a conversation name.";
+    conversationActionInput.focus();
+    return;
+  }
+
+  if (isRename && title.length > 80) {
+    conversationActionError.textContent =
+      "The name must be 80 characters or fewer.";
+    return;
+  }
+
+  actionSaving = true;
+  confirmConversationAction.disabled = true;
+  cancelConversationAction.disabled = true;
+  closeConversationAction.disabled = true;
+
+  confirmConversationAction.textContent = isRename ? "Saving…" : "Deleting…";
+
+  conversationActionError.textContent = "";
+
+  try {
+    const encodedId = encodeURIComponent(conversationId);
+
+    if (isRename) {
+      await apiRequest(`/api/conversations/${encodedId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title }),
+      });
+    } else {
+      await apiRequest(`/api/conversations/${encodedId}`, {
+        method: "DELETE",
+      });
+
+      if (currentConversationId === conversationId) {
+        currentConversationId = null;
+        resetChatUI();
+      }
+    }
+
+    conversationActionModal.classList.add("hidden");
+    pendingConversationAction = null;
+
+    await refreshHistory();
+
+    setHistoryStatus(
+      isRename
+        ? "Conversation renamed successfully."
+        : "Conversation deleted successfully.",
+    );
+  } catch (error) {
+    conversationActionError.textContent =
+      error.message || "Something went wrong. Please try again.";
+  } finally {
+    actionSaving = false;
+
+    confirmConversationAction.disabled = false;
+    cancelConversationAction.disabled = false;
+    closeConversationAction.disabled = false;
+
+    confirmConversationAction.textContent =
+      pendingConversationAction?.type === "delete"
+        ? "Delete conversation"
+        : "Save changes";
+  }
+});
+
+closeConversationAction.addEventListener(
+  "click",
+  closeConversationActionDialog,
+);
+
+cancelConversationAction.addEventListener(
+  "click",
+  closeConversationActionDialog,
+);
+
+conversationActionModal.addEventListener("click", (event) => {
+  if (event.target === conversationActionModal) {
+    closeConversationActionDialog();
+  }
+});
+
+// Delegate history actions so the buttons continue working after re-render.
+historyList.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-history-action]");
+
+  if (!button) return;
+
+  const action = button.dataset.historyAction;
+  const id = button.dataset.id;
+
+  if (!id) return;
+
+  if (action === "open") {
+    await openConversation(id);
+  } else if (action === "rename") {
+    await renameConversation(id);
+  } else if (action === "delete") {
+    await deleteConversation(id);
+  }
+});
+
+historyToggle.addEventListener("click", openHistoryModal);
+
+newChatBtn.addEventListener("click", createNewChat);
+historyNewChat.addEventListener("click", createNewChat);
+
+closeHistory.addEventListener("click", closeHistoryModal);
+
+refreshHistoryBtn.addEventListener("click", () => {
+  refreshHistory();
+});
+
+historyModal.addEventListener("click", (event) => {
+  if (event.target === historyModal) {
+    closeHistoryModal();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeConversationActionDialog();
+    closeHistoryModal();
+    document.getElementById("uploadModal")?.classList.add("hidden");
+  }
+});
+
+// ---------- Agent Chat ----------
 
 async function askAgent(rawQuestion) {
   const userQuestion = String(rawQuestion || "").trim();
 
-  if (!userQuestion || requestInProgress) {
-    return;
-  }
-
-  const welcome = document.getElementById("welcomeState");
-
-  if (welcome) {
-    welcome.remove();
-  }
-
-  const chatExamples = document.getElementById("chatExamples");
-
-  if (chatExamples) {
-    chatExamples.classList.remove("hidden");
-  }
-
-  addMessage("user", userQuestion);
-
-  question.value = "";
-
-  showTypingIndicator();
-
-  renderTrace(["Starting LangGraph workflow…"], true);
-
-  sourceUsed.textContent = formatSource("running");
+  if (!userQuestion || requestInProgress) return;
 
   setRequestBusy(true);
 
-  const streamedTrace = [];
+  try {
+    // Create a conversation if the user starts chatting before one is selected.
+    if (!currentConversationId) {
+      const data = await apiRequest("/api/conversations", {
+        method: "POST",
+      });
 
-  let finalData = null;
-  let reader = null;
+      currentConversationId = data.conversation.id;
 
-  function handleStreamLine(line) {
-    if (!line.trim()) {
-      return;
+      resetChatUI();
+
+      await refreshHistory(false);
     }
 
-    let event;
+    document.getElementById("welcomeState")?.remove();
+
+    document.getElementById("chatExamples")?.classList.remove("hidden");
+
+    addMessage("user", userQuestion);
+
+    question.value = "";
+
+    showTypingIndicator();
+
+    renderTrace(["Starting LangGraph workflow…"], true);
+    sourceUsed.textContent = "Running…";
+
+    const streamedTrace = [];
+
+    let finalData = null;
+    let reader = null;
 
     try {
-      event = JSON.parse(line);
-    } catch {
-      throw new Error("The server returned an invalid streaming response.");
-    }
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: userQuestion,
+          conversation_id: currentConversationId,
+        }),
+      });
 
-    if (event.type === "trace") {
-      const nodeName = formatTraceNode(event.node || "Workflow step");
+      if (!response.ok) {
+        let message = `Request failed (${response.status}).`;
 
-      streamedTrace.push(`Running → ${nodeName}`);
+        try {
+          const data = await response.json();
+          message = data.detail || message;
+        } catch {
+          // Keep the default message.
+        }
 
-      renderTrace(streamedTrace, true);
-    } else if (event.type === "final") {
-      finalData = event;
-    } else if (event.type === "error") {
-      throw new Error(
-        event.detail || "The agent could not complete this request.",
-      );
-    }
-  }
+        throw new Error(message);
+      }
 
-  try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        question: userQuestion,
-      }),
-    });
+      if (!response.body) {
+        throw new Error("Streaming is not available for this response.");
+      }
 
-    if (!response.ok) {
-      const responseText = await response.text();
+      reader = response.body.getReader();
 
-      let message = `Request failed (${response.status}).`;
+      const decoder = new TextDecoder();
 
-      try {
-        const errorData = JSON.parse(responseText);
+      let buffer = "";
 
-        message = errorData.detail || message;
-      } catch {
-        if (responseText.trim()) {
-          message = responseText.trim().slice(0, 300);
+      function handleStreamLine(line) {
+        if (!line.trim()) return;
+
+        let event;
+
+        try {
+          event = JSON.parse(line);
+        } catch {
+          throw new Error("The server returned an invalid stream event.");
+        }
+
+        if (event.type === "trace") {
+          streamedTrace.push(
+            `Running → ${formatTraceNode(event.node || "Workflow step")}`,
+          );
+
+          renderTrace(streamedTrace, true);
+        } else if (event.type === "final") {
+          finalData = event;
+        } else if (event.type === "error") {
+          throw new Error(
+            event.detail || "The agent could not complete this request.",
+          );
         }
       }
 
-      throw new Error(message);
-    }
+      while (true) {
+        const { value, done } = await reader.read();
 
-    if (!response.body) {
-      throw new Error("Streaming is not available in this browser response.");
-    }
+        if (done) break;
 
-    reader = response.body.getReader();
+        buffer += decoder.decode(value, { stream: true });
 
-    const decoder = new TextDecoder();
+        const lines = buffer.split("\n");
 
-    let buffer = "";
+        buffer = lines.pop() || "";
 
-    while (true) {
-      const { value, done } = await reader.read();
-
-      if (done) {
-        break;
+        for (const line of lines) {
+          handleStreamLine(line);
+        }
       }
 
-      buffer += decoder.decode(value, {
-        stream: true,
-      });
+      buffer += decoder.decode();
 
-      const lines = buffer.split("\n");
-
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        handleStreamLine(line);
+      if (buffer.trim()) {
+        handleStreamLine(buffer);
       }
-    }
 
-    // Process the last response record even when it has no newline.
-    buffer += decoder.decode();
+      if (!finalData) {
+        throw new Error(
+          "The agent finished without returning a final answer. Please try again.",
+        );
+      }
 
-    if (buffer.trim()) {
-      handleStreamLine(buffer);
-    }
+      hideTypingIndicator();
 
-    if (!finalData) {
-      throw new Error(
-        "The agent ended the response without returning a final answer. Please try again.",
+      addMessage(
+        "assistant",
+        finalData.answer || "The agent returned an empty answer.",
+        finalData.source_used || "",
+        finalData.citations || [],
       );
+
+      renderTrace(finalData.trace || streamedTrace, false);
+
+      sourceUsed.textContent = formatSource(finalData.source_used || "");
+    } finally {
+      if (reader) {
+        try {
+          reader.releaseLock();
+        } catch {
+          // The reader may already be released.
+        }
+      }
     }
-
-    hideTypingIndicator();
-
-    addMessage(
-      "assistant",
-      finalData.answer ||
-        "The agent completed the request but returned an empty answer.",
-      finalData.source_used || "",
-      finalData.citations || [],
-    );
-
-    renderTrace(finalData.trace || streamedTrace, false);
-
-    sourceUsed.textContent = formatSource(finalData.source_used || "");
   } catch (error) {
     hideTypingIndicator();
 
     addMessage(
       "assistant",
       `**I couldn't complete that request.** ${
-        error?.message || "An unexpected error occurred."
+        error.message || "An unexpected error occurred."
       }`,
     );
 
     renderTrace(["Request failed"], false);
-
-    sourceUsed.textContent = formatSource("error");
+    sourceUsed.textContent = "Error";
   } finally {
-    if (reader) {
-      try {
-        reader.releaseLock();
-      } catch {
-        // The stream may already have released its reader.
-      }
-    }
-
     hideTypingIndicator();
 
     setRequestBusy(false);
+
+    // Refresh conversation titles and message counts after each request.
+    try {
+      await refreshHistory(false);
+    } catch {
+      // A history refresh failure should not remove the chat answer.
+    }
   }
 }
 
-// Enter submits; Shift + Enter adds a new line.
+// Enter submits. Shift + Enter adds a line break.
 question.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -454,19 +913,20 @@ form.addEventListener("submit", (event) => {
   }
 });
 
-// Suggested questions.
-document.querySelectorAll(".example").forEach((button) => {
-  button.addEventListener("click", () => {
-    if (requestInProgress) {
-      return;
-    }
+// Suggested questions, including those in the welcome screen.
+document.addEventListener("click", (event) => {
+  const button = event.target.closest(".example");
 
-    askAgent(button.dataset.question || button.textContent.trim());
-  });
+  if (!button || requestInProgress) return;
+
+  event.preventDefault();
+
+  askAgent(button.dataset.question || button.textContent.trim());
 });
 
-// HR document upload modal.
-const modal = document.getElementById("uploadModal");
+// ---------- HR Document Upload ----------
+
+const uploadModal = document.getElementById("uploadModal");
 const fileInput = document.getElementById("fileInput");
 const fileLabel = document.getElementById("fileLabel");
 const uploadButton = document.getElementById("uploadBtn");
@@ -476,18 +936,16 @@ fileInput.addEventListener("change", () => {
 });
 
 document.getElementById("openUpload").addEventListener("click", () => {
-  modal.classList.remove("hidden");
+  uploadModal.classList.remove("hidden");
 });
 
 document.getElementById("closeUpload").addEventListener("click", () => {
-  modal.classList.add("hidden");
+  uploadModal.classList.add("hidden");
 });
 
 uploadButton.addEventListener("click", async () => {
   const file = fileInput.files?.[0];
-
   const key = document.getElementById("adminKey").value;
-
   const status = document.getElementById("uploadStatus");
 
   if (!file) {
@@ -496,12 +954,10 @@ uploadButton.addEventListener("click", async () => {
   }
 
   const formData = new FormData();
-
   formData.append("file", file);
 
   uploadButton.disabled = true;
   uploadButton.textContent = "Submitting…";
-
   status.textContent = "Submitting document…";
 
   try {
@@ -529,14 +985,15 @@ uploadButton.addEventListener("click", async () => {
 
     status.textContent = "✓ Document submitted successfully";
   } catch (error) {
-    status.textContent = `Error: ${error?.message || "Upload failed."}`;
+    status.textContent = `Error: ${error.message || "Upload failed."}`;
   } finally {
     uploadButton.disabled = false;
     uploadButton.textContent = "Submit Document";
   }
 });
 
-// Typing indicator.
+// ---------- Typing Indicator ----------
+
 function showTypingIndicator() {
   hideTypingIndicator();
 
@@ -550,15 +1007,10 @@ function showTypingIndicator() {
 
   wrap.innerHTML = `
     <div class="avatar" aria-hidden="true">AI</div>
-
     <div class="bubble">
       <div class="typing-indicator">
         <span>HR Mind AI is thinking</span>
-
-        <div
-          class="typing-dots"
-          aria-hidden="true"
-        >
+        <div class="typing-dots" aria-hidden="true">
           <span></span>
           <span></span>
           <span></span>
@@ -575,3 +1027,26 @@ function showTypingIndicator() {
 function hideTypingIndicator() {
   document.getElementById("typingIndicator")?.remove();
 }
+
+// ---------- Startup ----------
+
+async function initializeApp() {
+  try {
+    const items = await refreshHistory(false);
+
+    if (items.length) {
+      // Restore the most recently updated conversation on page refresh.
+      await openConversation(items[0].id);
+    } else {
+      resetChatUI();
+    }
+  } catch {
+    resetChatUI();
+    setHistoryStatus(
+      "History is unavailable. You can still try starting a new chat.",
+      true,
+    );
+  }
+}
+
+initializeApp();

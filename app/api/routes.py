@@ -2,11 +2,20 @@ import hmac
 import json
 import logging
 import re
+import secrets
 import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, Header, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -14,19 +23,70 @@ from app.core.config import get_settings
 from app.rag.vectorstore import add_documents
 from app.rag.workflow import agent_graph
 from app.services.audit import write_audit
+from app.services.conversations import (
+    create_conversation,
+    delete_conversation,
+    get_conversation,
+    get_messages,
+    list_conversations,
+    rename_conversation,
+    save_message,
+)
 from app.services.ingestion import SUPPORTED, chunk_documents, load_file
 
 router = APIRouter(prefix="/api")
+
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+OWNER_COOKIE = "hrmind_owner"
+DEFAULT_ADMIN_KEY = "change-me-in-production"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 UPLOAD_READ_CHUNK_BYTES = 64 * 1024
-DEFAULT_ADMIN_KEY = "change-me-in-production"
 
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=3000)
+    conversation_id: str | None = None
+
+
+class RenameConversationRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+
+
+def resolve_owner(request: Request) -> tuple[str, bool]:
+    """
+    Identify this browser using a random, HttpOnly cookie.
+
+    This separates browser histories but is not a replacement
+    for proper user authentication.
+    """
+    owner_id = request.cookies.get(OWNER_COOKIE, "")
+
+    if re.fullmatch(r"[A-Za-z0-9_-]{32,100}", owner_id):
+        return owner_id, False
+
+    return secrets.token_urlsafe(32), True
+
+
+def set_owner_cookie(
+    response: Response,
+    request: Request,
+    owner_id: str,
+    is_new: bool,
+) -> None:
+    if not is_new:
+        return
+
+    response.set_cookie(
+        key=OWNER_COOKIE,
+        value=owner_id,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        max_age=60 * 60 * 24 * 365,
+        path="/",
+    )
 
 
 @router.get("/health")
@@ -37,10 +97,167 @@ def health():
     }
 
 
+# ---------------------------------------------------------
+# Conversation history
+# ---------------------------------------------------------
+
+
+@router.get("/conversations")
+def conversations(
+    request: Request,
+    response: Response,
+):
+    owner_id, is_new = resolve_owner(request)
+    set_owner_cookie(response, request, owner_id, is_new)
+
+    return {"conversations": list_conversations(owner_id)}
+
+
+@router.post("/conversations", status_code=201)
+def new_conversation(
+    request: Request,
+    response: Response,
+):
+    owner_id, is_new = resolve_owner(request)
+    set_owner_cookie(response, request, owner_id, is_new)
+
+    conversation = create_conversation(owner_id)
+
+    return {
+        "conversation": {
+            key: value for key, value in conversation.items() if key != "owner_id"
+        }
+    }
+
+
+@router.get("/conversations/{conversation_id}")
+def open_conversation(
+    conversation_id: str,
+    request: Request,
+    response: Response,
+):
+    owner_id, is_new = resolve_owner(request)
+    set_owner_cookie(response, request, owner_id, is_new)
+
+    conversation = get_conversation(
+        owner_id,
+        conversation_id,
+    )
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    return {
+        "conversation": conversation,
+        "messages": get_messages(
+            owner_id,
+            conversation_id,
+        ),
+    }
+
+
+@router.patch("/conversations/{conversation_id}")
+def update_conversation(
+    conversation_id: str,
+    payload: RenameConversationRequest,
+    request: Request,
+    response: Response,
+):
+    owner_id, is_new = resolve_owner(request)
+    set_owner_cookie(response, request, owner_id, is_new)
+
+    try:
+        updated = rename_conversation(
+            owner_id,
+            conversation_id,
+            payload.title,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from None
+
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    return {
+        "conversation": get_conversation(
+            owner_id,
+            conversation_id,
+        )
+    }
+
+
+@router.delete("/conversations/{conversation_id}")
+def remove_conversation(
+    conversation_id: str,
+    request: Request,
+    response: Response,
+):
+    owner_id, is_new = resolve_owner(request)
+    set_owner_cookie(response, request, owner_id, is_new)
+
+    deleted = delete_conversation(
+        owner_id,
+        conversation_id,
+    )
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    return {
+        "deleted": True,
+        "conversation_id": conversation_id,
+    }
+
+
+# ---------------------------------------------------------
+# Chat
+# ---------------------------------------------------------
+
+
 @router.post("/chat")
-def chat(payload: ChatRequest):
+def chat(
+    payload: ChatRequest,
+    request: Request,
+):
+    owner_id, is_new = resolve_owner(request)
+    conversation_id = payload.conversation_id
+
+    # Verify ownership before starting the streamed response.
+    if conversation_id:
+        conversation = get_conversation(
+            owner_id,
+            conversation_id,
+        )
+
+        if conversation is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Conversation not found.",
+            )
+
     def generate():
         try:
+            # Save the user's question before running the agent.
+            if conversation_id:
+                save_message(
+                    owner_id=owner_id,
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=payload.question,
+                )
+
             initial = {
                 "question": payload.question,
                 "current_query": payload.question,
@@ -71,23 +288,39 @@ def chat(payload: ChatRequest):
                         }
                     ) + "\n"
 
-            # Audit failures should not discard an otherwise valid answer.
+            answer = final_state.get("answer", "")
+            source_used = final_state.get("source_used", "")
+            trace_items = final_state.get("trace", [])
+            citations = final_state.get("citations", [])
+
             try:
                 write_audit(
                     payload.question,
-                    final_state.get("source_used", ""),
-                    final_state.get("trace", []),
+                    source_used,
+                    trace_items,
                 )
             except Exception:
                 logger.exception("Failed to write chat audit record")
 
+            # Save the assistant response to the conversation.
+            if conversation_id:
+                save_message(
+                    owner_id=owner_id,
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=answer,
+                    source_used=source_used,
+                    citations=citations,
+                    trace=trace_items,
+                )
+
             yield json.dumps(
                 {
                     "type": "final",
-                    "answer": final_state.get("answer", ""),
-                    "source_used": final_state.get("source_used", ""),
-                    "trace": final_state.get("trace", []),
-                    "citations": final_state.get("citations", []),
+                    "answer": answer,
+                    "source_used": source_used,
+                    "trace": trace_items,
+                    "citations": citations,
                     "rewritten_query": final_state.get(
                         "current_query",
                         payload.question,
@@ -96,8 +329,7 @@ def chat(payload: ChatRequest):
             ) + "\n"
 
         except Exception:
-            # Keep internal exception details out of the browser response.
-            logger.exception("Agent chat request failed")
+            logger.exception("Chat request failed")
 
             yield json.dumps(
                 {
@@ -109,7 +341,7 @@ def chat(payload: ChatRequest):
                 }
             ) + "\n"
 
-    return StreamingResponse(
+    stream = StreamingResponse(
         generate(),
         media_type="application/x-ndjson",
         headers={
@@ -118,21 +350,28 @@ def chat(payload: ChatRequest):
         },
     )
 
+    set_owner_cookie(stream, request, owner_id, is_new)
+
+    return stream
+
+
+# ---------------------------------------------------------
+# HR document uploads
+# ---------------------------------------------------------
+
 
 @router.post("/ingest")
 async def ingest(
     file: UploadFile = File(...),
     x_admin_key: str = Header(default=""),
 ):
-    # Never allow the documented placeholder key in production.
     configured_key = settings.admin_api_key or ""
 
     if not configured_key or configured_key == DEFAULT_ADMIN_KEY:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Document uploads are not configured. "
-                "Set a private ADMIN_API_KEY in your .env file."
+                "Document uploads are not configured. " "Set a private ADMIN_API_KEY."
             ),
         )
 
@@ -145,7 +384,6 @@ async def ingest(
             detail="Invalid admin key",
         )
 
-    # Normalize Windows-style paths before extracting the filename.
     original_name = Path((file.filename or "document").replace("\\", "/")).name
 
     suffix = Path(original_name).suffix.lower()
@@ -156,21 +394,23 @@ async def ingest(
             detail=("Supported file types: " f"{', '.join(sorted(SUPPORTED))}"),
         )
 
-    # Sanitize the filename and keep the approved extension.
-    stem = re.sub(
-        r"[^\w.-]+",
-        "_",
-        Path(original_name).stem,
-        flags=re.UNICODE,
+    stem = (
+        re.sub(
+            r"[^\w.-]+",
+            "_",
+            Path(original_name).stem,
+        ).strip(
+            "._"
+        )[:100]
+        or "document"
     )
-    stem = stem.strip("._")[:100] or "document"
+
     safe_filename = f"{stem}{suffix}"
 
     upload_root = Path(settings.upload_dir).resolve()
     upload_folder = upload_root / uuid.uuid4().hex
     destination = upload_folder / safe_filename
 
-    # Stream the upload to disk instead of reading it all into memory.
     try:
         upload_folder.mkdir(
             parents=True,
@@ -219,13 +459,12 @@ async def ingest(
 
         raise HTTPException(
             status_code=500,
-            detail=("Could not save the uploaded document. " "Please try again."),
+            detail="Could not save the uploaded document.",
         ) from None
 
     finally:
         await file.close()
 
-    # Parse and split the saved file into searchable chunks.
     try:
         documents = load_file(destination)
         chunks = chunk_documents(documents)
@@ -257,19 +496,13 @@ async def ingest(
 
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Could not read this file. Upload a valid PDF, "
-                "DOCX, TXT, or MD document."
-            ),
+            detail=("Could not read this file. Upload a valid " "supported document."),
         ) from None
 
-    # Index the chunks in the existing Pinecone namespace.
     try:
         ids = add_documents(chunks)
 
     except Exception:
-        # Keep the saved file because indexing may have partially
-        # succeeded. Detailed errors remain in the server logs.
         logger.exception(
             "Failed to index uploaded document: %s",
             safe_filename,

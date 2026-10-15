@@ -12,7 +12,6 @@
         <div>
           <div class="brand-row">
             <div class="brand-logo">HR Mind AI</div>
-            <!-- <div class="brand-name">HR Mind AI</div> -->
           </div>
 
           <p class="muted">
@@ -20,26 +19,74 @@
             is weak.
           </p>
         </div>
+
         <div class="workflow-card">
           <h3>LangGraph Workflow</h3>
           <div class="flow-step">1. Route question</div>
           <div class="flow-step">2. Retrieve private KB</div>
           <div class="flow-step">3. Grade evidence</div>
           <div class="flow-step">4. Web fallback if weak</div>
-          <div class="flow-step">5. Rewrite & retry</div>
+          <div class="flow-step">5. Rewrite &amp; retry</div>
           <div class="flow-step">6. Grounded answer</div>
         </div>
-        <button id="openUpload" class="secondary-btn">+ Add HR Document</button>
+
+        <button id="openUpload" class="secondary-btn" type="button">
+          + Add HR Document
+        </button>
       </aside>
 
       <main class="main">
         <header class="topbar">
-          <div>
+          <div class="topbar-identity">
             <span class="status-dot"></span>
-            <span>Employee Knowledge Copilot</span>
+            <span class="topbar-label">Employee Knowledge Copilot</span>
           </div>
-          <span class="pill">Agentic RAG</span>
+
+          <div class="topbar-actions">
+            <button
+              id="historyToggle"
+              class="history-header-btn"
+              type="button"
+              aria-label="Open conversation history"
+              title="Conversation history"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="17"
+                height="17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+              <span class="history-btn-label">History</span>
+            </button>
+
+            <button id="newChatBtn" class="new-chat-header-btn" type="button">
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                aria-hidden="true"
+              >
+                <path d="M12 5v14" />
+                <path d="M5 12h14" />
+              </svg>
+              <span>New Chat</span>
+            </button>
+          </div>
         </header>
+
         <section id="chat" class="chat-area">
           <div id="welcomeState" class="welcome-state">
             <h2>Welcome to HR Mind AI</h2>
@@ -53,14 +100,16 @@
               <button
                 class="welcome-card example"
                 data-question="How many annual leave days do employees receive?"
+                type="button"
               >
-                <strong>Leave & Benefits</strong>
+                <strong>Leave &amp; Benefits</strong>
                 <span>Ask about leave entitlement and employee benefits</span>
               </button>
 
               <button
                 class="welcome-card example"
                 data-question="What is our remote work policy?"
+                type="button"
               >
                 <strong>Remote Work</strong>
                 <span>Ask about remote work and attendance policies</span>
@@ -69,14 +118,16 @@
               <button
                 class="welcome-card example"
                 data-question="What are the company's payroll and attendance policies?"
+                type="button"
               >
-                <strong>Payroll & Policies</strong>
+                <strong>Payroll &amp; Policies</strong>
                 <span>Ask about payroll, attendance, and company policies</span>
               </button>
 
               <button
                 class="welcome-card example"
                 data-question="What are the latest public holiday rules in India?"
+                type="button"
               >
                 <strong>External HR Information</strong>
                 <span>Ask about current employment-related information</span>
@@ -84,16 +135,22 @@
             </div>
           </div>
         </section>
+
         <section class="composer-wrap">
           <div id="chatExamples" class="examples hidden">
-            <button class="example">
+            <button class="example" type="button">
               How many annual leave days do employees receive?
             </button>
-            <button class="example">What is our remote work policy?</button>
-            <button class="example">
+
+            <button class="example" type="button">
+              What is our remote work policy?
+            </button>
+
+            <button class="example" type="button">
               What are the latest public holiday rules in India?
             </button>
           </div>
+
           <form id="chatForm" class="composer">
             <textarea
               id="question"
@@ -101,33 +158,166 @@
               placeholder="Ask an HR policy or employee support question..."
               required
             ></textarea>
+
             <button type="submit" class="send-btn">Ask Agent</button>
           </form>
         </section>
       </main>
+
       <aside class="trace-panel">
         <h2>Agent Trace</h2>
+
         <p class="muted">Watch LangGraph decisions while the request runs.</p>
+
         <div id="trace" class="trace-list">
           <div class="empty">No request yet.</div>
         </div>
+
         <div class="source-box">
           <span>Final Source</span>
           <strong id="sourceUsed">—</strong>
         </div>
       </aside>
     </div>
+
+    <!-- Conversation History Modal -->
+    <div id="historyModal" class="modal hidden">
+      <div
+        class="modal-card history-modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="historyTitle"
+      >
+        <div class="modal-head">
+          <h2 id="historyTitle">Conversation History</h2>
+
+          <button
+            id="closeHistory"
+            type="button"
+            aria-label="Close conversation history"
+          >
+            &times;
+          </button>
+        </div>
+
+        <p class="muted">
+          Reopen previous chats or manage your saved conversations.
+        </p>
+
+        <div class="history-toolbar">
+          <button id="historyNewChat" class="secondary-btn" type="button">
+            + New Chat
+          </button>
+
+          <button id="refreshHistory" class="topbar-action" type="button">
+            Refresh
+          </button>
+        </div>
+
+        <div
+          id="historyStatus"
+          class="history-status"
+          role="status"
+          aria-live="polite"
+        ></div>
+
+        <div id="historyList" class="history-list">
+          <div class="empty">Loading conversations...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Conversation Rename / Delete Dialog -->
+    <div id="conversationActionModal" class="modal hidden">
+      <div
+        class="modal-card conversation-action-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="conversationActionTitle"
+        aria-describedby="conversationActionDescription"
+      >
+        <div class="modal-head">
+          <h2 id="conversationActionTitle">Rename conversation</h2>
+
+          <button
+            id="closeConversationAction"
+            type="button"
+            aria-label="Close dialog"
+          >
+            &times;
+          </button>
+        </div>
+
+        <p id="conversationActionDescription" class="muted">
+          Choose a name that's easy to recognize later.
+        </p>
+
+        <form id="conversationActionForm">
+          <div id="conversationRenameFields">
+            <label
+              for="conversationActionInput"
+              class="conversation-action-label"
+            >
+              Conversation name
+            </label>
+
+            <input
+              id="conversationActionInput"
+              type="text"
+              maxlength="80"
+              autocomplete="off"
+              placeholder="e.g. HR Policy Questions"
+            />
+          </div>
+
+          <p
+            id="conversationActionError"
+            class="conversation-action-error"
+            role="alert"
+          ></p>
+
+          <div class="conversation-action-buttons">
+            <button
+              id="cancelConversationAction"
+              class="conversation-cancel-btn"
+              type="button"
+            >
+              Cancel
+            </button>
+
+            <button
+              id="confirmConversationAction"
+              class="conversation-confirm-btn"
+              type="submit"
+            >
+              Save changes
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <!-- HR Document Upload Modal -->
     <div id="uploadModal" class="modal hidden">
       <div class="modal-card">
         <div class="modal-head">
           <h2>Ingest HR Document</h2>
-          <button id="closeUpload">×</button>
+
+          <button
+            id="closeUpload"
+            type="button"
+            aria-label="Close upload dialog"
+          >
+            &times;
+          </button>
         </div>
+
         <p class="muted">
           Upload PDF, TXT, Markdown, or DOCX. The document is chunked, embedded,
           and indexed into Pinecone.
         </p>
+
         <input id="adminKey" type="password" placeholder="Admin API key" />
+
         <label for="fileInput" class="file-picker">
           <span id="fileLabel">Choose HR document</span>
           <span class="file-hint">PDF, TXT, MD or DOCX</span>
@@ -135,10 +325,14 @@
 
         <input id="fileInput" type="file" accept=".pdf,.txt,.md,.docx" hidden />
 
-        <button id="uploadBtn" class="send-btn full">Submit Document</button>
+        <button id="uploadBtn" class="send-btn full" type="button">
+          Submit Document
+        </button>
+
         <div id="uploadStatus" class="upload-status"></div>
       </div>
     </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
     <script src="/static/js/app.js"></script>
