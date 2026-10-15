@@ -13,7 +13,6 @@ settings = get_settings()
 _embeddings = None
 _vectorstore = None
 
-
 EMBEDDING_DIMENSIONS = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
@@ -23,19 +22,24 @@ EMBEDDING_DIMENSIONS = {
 
 
 class FastEmbedEmbeddings(Embeddings):
+    """Generate normalized embeddings locally using FastEmbed."""
+
     def __init__(self):
         self.model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-    def _normalize(self, vector):
+    @staticmethod
+    def _normalize(vector):
         vector = np.asarray(vector, dtype=np.float32)
         norm = np.linalg.norm(vector)
+
         if norm == 0:
             return vector.tolist()
+
         return (vector / norm).tolist()
 
     def embed_documents(self, texts):
         vectors = self.model.embed(texts)
-        return [self._normalize(v) for v in vectors]
+        return [self._normalize(vector) for vector in vectors]
 
     def embed_query(self, text):
         vector = next(self.model.embed([text]))
@@ -43,10 +47,12 @@ class FastEmbedEmbeddings(Embeddings):
 
 
 def get_embedding_dimension(model_name: str | None = None) -> int:
+    """Return the expected vector dimension for the configured model."""
+
     name = (model_name or settings.embedding_model or "").strip()
 
     if not name:
-        raise RuntimeError("Embedding model is not configured")
+        raise RuntimeError("Embedding model is not configured.")
 
     normalized = name.lower()
 
@@ -66,13 +72,14 @@ def get_embedding_dimension(model_name: str | None = None) -> int:
         return 384
 
     raise ValueError(
-        f"Unsupported embedding model "
-        f"'{model_name or settings.embedding_model}' for Pinecone. "
-        "Add the matching dimension to EMBEDDING_DIMENSIONS."
+        f"Unsupported embedding model '{name}'. "
+        "Add its dimension to EMBEDDING_DIMENSIONS."
     )
 
 
 def get_embeddings():
+    """Create the embedding model once per application process."""
+
     global _embeddings
 
     if _embeddings is None:
@@ -81,50 +88,110 @@ def get_embeddings():
     return _embeddings
 
 
+def _get_index_names(client):
+    """Return existing Pinecone index names."""
+
+    return [item["name"] for item in client.list_indexes()]
+
+
+def _get_dimension(index_info):
+    """Read the index dimension across supported response formats."""
+
+    if isinstance(index_info, dict):
+        return index_info.get("dimension")
+
+    return getattr(index_info, "dimension", None)
+
+
+def _is_index_ready(index_info):
+    """Check whether Pinecone reports an index as ready."""
+
+    if isinstance(index_info, dict):
+        status = index_info.get("status")
+    else:
+        status = getattr(index_info, "status", None)
+
+    if isinstance(status, dict):
+        return status.get("ready") is True
+
+    return getattr(status, "ready", False) is True
+
+
 def ensure_index():
+    """
+    Verify or create the configured Pinecone index.
+
+    Important:
+    This function never deletes an existing index automatically.
+    """
+
     if not settings.pinecone_api_key:
-        raise RuntimeError("PINECONE_API_KEY is missing")
+        raise RuntimeError("PINECONE_API_KEY is missing.")
+
+    if not settings.pinecone_index_name:
+        raise RuntimeError("PINECONE_INDEX_NAME is missing.")
 
     desired_dimension = get_embedding_dimension()
 
-    pc = Pinecone(api_key=settings.pinecone_api_key)
+    client = Pinecone(api_key=settings.pinecone_api_key)
+    index_name = settings.pinecone_index_name
 
-    names = [x["name"] for x in pc.list_indexes()]
+    existing_indexes = _get_index_names(client)
 
-    if settings.pinecone_index_name in names:
-        index_info = pc.describe_index(settings.pinecone_index_name)
+    # Reuse an existing index only when its dimensions match.
+    if index_name in existing_indexes:
+        index_info = client.describe_index(index_name)
+        current_dimension = _get_dimension(index_info)
 
-        current_dimension = getattr(index_info, "dimension", None)
+        if current_dimension is None:
+            raise RuntimeError(
+                f"Could not verify the dimensions of Pinecone index "
+                f"'{index_name}'. No changes were made."
+            )
 
-        if current_dimension is None and isinstance(index_info, dict):
-            current_dimension = index_info.get("dimension")
+        if current_dimension != desired_dimension:
+            raise RuntimeError(
+                f"Pinecone index '{index_name}' has dimension "
+                f"{current_dimension}, but the configured embedding "
+                f"model requires dimension {desired_dimension}. "
+                "The existing index was NOT deleted or modified. "
+                "Check your embedding model and index configuration "
+                "before proceeding."
+            )
 
-        if current_dimension is not None and current_dimension != desired_dimension:
-            pc.delete_index(name=settings.pinecone_index_name)
+        return client.Index(index_name)
 
-            while settings.pinecone_index_name in [
-                x["name"] for x in pc.list_indexes()
-            ]:
-                time.sleep(1)
+    # Create an index only when it does not already exist.
+    client.create_index(
+        name=index_name,
+        dimension=desired_dimension,
+        metric="cosine",
+        spec=ServerlessSpec(
+            cloud="aws",
+            region="us-east-1",
+        ),
+    )
 
-    if settings.pinecone_index_name not in [x["name"] for x in pc.list_indexes()]:
-        pc.create_index(
-            name=settings.pinecone_index_name,
-            dimension=desired_dimension,
-            metric="cosine",
-            spec=ServerlessSpec(
-                cloud="aws",
-                region="us-east-1",
-            ),
-        )
+    # Wait for creation, but do not wait indefinitely.
+    deadline = time.monotonic() + 120
 
-        while not pc.describe_index(settings.pinecone_index_name).status["ready"]:
-            time.sleep(1)
+    while time.monotonic() < deadline:
+        index_info = client.describe_index(index_name)
 
-    return pc.Index(settings.pinecone_index_name)
+        if _is_index_ready(index_info):
+            return client.Index(index_name)
+
+        time.sleep(2)
+
+    raise TimeoutError(
+        f"Pinecone index '{index_name}' did not become ready "
+        "within 120 seconds. Check its status in the Pinecone console."
+    )
 
 
 def get_vectorstore():
+    """Initialize the Pinecone vector store once per process."""
+
     global _vectorstore
 
     if _vectorstore is None:
@@ -140,9 +207,13 @@ def get_vectorstore():
 
 
 def get_retriever():
+    """Return the retriever used by the HR knowledge workflow."""
+
     return get_vectorstore().as_retriever(search_kwargs={"k": settings.top_k})
 
 
 def add_documents(chunks):
+    """Add document chunks to the configured Pinecone namespace."""
+
     store = get_vectorstore()
     return store.add_documents(chunks)
