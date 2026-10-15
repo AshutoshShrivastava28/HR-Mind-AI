@@ -2517,3 +2517,34 @@ textarea:focus-visible {
     flex: 1;
   }
 }
+
+/* Fix: Keep the app title visible on mobile screens */
+@media (max-width: 420px) {
+  .topbar .topbar-identity {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .topbar .topbar-label {
+    display: inline-block !important;
+    min-width: 0;
+    max-width: clamp(90px, 42vw, 180px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: clamp(9px, 2.8vw, 11px);
+  }
+
+  .topbar .status-dot {
+    flex-shrink: 0;
+  }
+
+  .topbar .topbar-actions {
+    flex-shrink: 0;
+  }
+
+  .topbar .topbar-actions .pill {
+    display: none;
+  }
+}
