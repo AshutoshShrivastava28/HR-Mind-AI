@@ -1,28 +1,32 @@
-import hmac
 import json
 import logging
 import re
-import secrets
 import shutil
+import threading
+import time
 import uuid
 from pathlib import Path
 
-from fastapi import (
-    APIRouter,
-    File,
-    Header,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-)
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
-from app.rag.vectorstore import add_documents
-from app.rag.workflow import agent_graph
+from app.rag.vectorstore import add_documents, delete_vectors
+from app.rag.workflow import agent_graph, answer_guest_question
 from app.services.audit import write_audit
+from app.services.authentication import (
+    create_company_document,
+    create_personal_document,
+    delete_company_document_record,
+    delete_personal_document_record,
+    get_company_document,
+    get_current_user,
+    get_personal_document,
+    list_company_documents,
+    list_personal_documents,
+    require_admin,
+)
 from app.services.conversations import (
     create_conversation,
     delete_conversation,
@@ -39,10 +43,8 @@ router = APIRouter(prefix="/api")
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-OWNER_COOKIE = "hrmind_owner"
-DEFAULT_ADMIN_KEY = "change-me-in-production"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-UPLOAD_READ_CHUNK_BYTES = 64 * 1024
+UPLOAD_CHUNK_BYTES = 64 * 1024
 
 
 class ChatRequest(BaseModel):
@@ -50,42 +52,112 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
 
 
+class GuestChatRequest(BaseModel):
+    question: str = Field(min_length=2, max_length=1500)
+
+
 class RenameConversationRequest(BaseModel):
     title: str = Field(min_length=1, max_length=80)
 
 
-def resolve_owner(request: Request) -> tuple[str, bool]:
-    """
-    Identify this browser using a random, HttpOnly cookie.
+def _safe_filename(filename: str | None) -> str:
+    raw_name = Path((filename or "document").replace("\\", "/")).name
 
-    This separates browser histories but is not a replacement
-    for proper user authentication.
-    """
-    owner_id = request.cookies.get(OWNER_COOKIE, "")
+    suffix = Path(raw_name).suffix.lower()
 
-    if re.fullmatch(r"[A-Za-z0-9_-]{32,100}", owner_id):
-        return owner_id, False
+    if suffix not in SUPPORTED:
+        raise HTTPException(
+            status_code=400,
+            detail=("Supported file types: " f"{', '.join(sorted(SUPPORTED))}"),
+        )
 
-    return secrets.token_urlsafe(32), True
+    stem = (
+        re.sub(
+            r"[^\w.-]+",
+            "_",
+            Path(raw_name).stem,
+        ).strip(
+            "._"
+        )[:100]
+        or "document"
+    )
+
+    return f"{stem}{suffix}"
 
 
-def set_owner_cookie(
-    response: Response,
-    request: Request,
-    owner_id: str,
-    is_new: bool,
-) -> None:
-    if not is_new:
-        return
+async def _save_upload(
+    file: UploadFile,
+    destination: Path,
+) -> int:
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    response.set_cookie(
-        key=OWNER_COOKIE,
-        value=owner_id,
-        httponly=True,
-        secure=request.url.scheme == "https",
-        samesite="lax",
-        max_age=60 * 60 * 24 * 365,
-        path="/",
+    written = 0
+
+    try:
+        with destination.open("wb") as output:
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_BYTES)
+
+                if not chunk:
+                    break
+
+                written += len(chunk)
+
+                if written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Maximum upload size is 10 MB.",
+                    )
+
+                output.write(chunk)
+
+        if written == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file is empty.",
+            )
+
+        return written
+
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+
+    finally:
+        await file.close()
+
+
+def _load_and_chunk(path: Path):
+    try:
+        documents = load_file(path)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from None
+
+    for document in documents:
+        document.metadata["source"] = path.name
+
+    chunks = chunk_documents(documents)
+
+    if not chunks:
+        raise HTTPException(
+            status_code=400,
+            detail="No readable text was found in this document.",
+        )
+
+    return chunks
+
+
+def _remove_upload_files(destination: Path) -> None:
+    destination.unlink(missing_ok=True)
+    shutil.rmtree(
+        destination.parent,
+        ignore_errors=True,
     )
 
 
@@ -98,30 +170,22 @@ def health():
 
 
 # ---------------------------------------------------------
-# Conversation history
+# Conversation history: authenticated account ownership
 # ---------------------------------------------------------
 
 
 @router.get("/conversations")
-def conversations(
-    request: Request,
-    response: Response,
-):
-    owner_id, is_new = resolve_owner(request)
-    set_owner_cookie(response, request, owner_id, is_new)
+def conversations(request: Request):
+    user = get_current_user(request)
 
-    return {"conversations": list_conversations(owner_id)}
+    return {"conversations": list_conversations(user["id"])}
 
 
 @router.post("/conversations", status_code=201)
-def new_conversation(
-    request: Request,
-    response: Response,
-):
-    owner_id, is_new = resolve_owner(request)
-    set_owner_cookie(response, request, owner_id, is_new)
+def new_conversation(request: Request):
+    user = get_current_user(request)
 
-    conversation = create_conversation(owner_id)
+    conversation = create_conversation(user["id"])
 
     return {
         "conversation": {
@@ -134,17 +198,15 @@ def new_conversation(
 def open_conversation(
     conversation_id: str,
     request: Request,
-    response: Response,
 ):
-    owner_id, is_new = resolve_owner(request)
-    set_owner_cookie(response, request, owner_id, is_new)
+    user = get_current_user(request)
 
     conversation = get_conversation(
-        owner_id,
+        user["id"],
         conversation_id,
     )
 
-    if conversation is None:
+    if not conversation:
         raise HTTPException(
             status_code=404,
             detail="Conversation not found.",
@@ -153,7 +215,7 @@ def open_conversation(
     return {
         "conversation": conversation,
         "messages": get_messages(
-            owner_id,
+            user["id"],
             conversation_id,
         ),
     }
@@ -164,14 +226,12 @@ def update_conversation(
     conversation_id: str,
     payload: RenameConversationRequest,
     request: Request,
-    response: Response,
 ):
-    owner_id, is_new = resolve_owner(request)
-    set_owner_cookie(response, request, owner_id, is_new)
+    user = get_current_user(request)
 
     try:
         updated = rename_conversation(
-            owner_id,
+            user["id"],
             conversation_id,
             payload.title,
         )
@@ -189,7 +249,7 @@ def update_conversation(
 
     return {
         "conversation": get_conversation(
-            owner_id,
+            user["id"],
             conversation_id,
         )
     }
@@ -199,13 +259,11 @@ def update_conversation(
 def remove_conversation(
     conversation_id: str,
     request: Request,
-    response: Response,
 ):
-    owner_id, is_new = resolve_owner(request)
-    set_owner_cookie(response, request, owner_id, is_new)
+    user = get_current_user(request)
 
     deleted = delete_conversation(
-        owner_id,
+        user["id"],
         conversation_id,
     )
 
@@ -222,7 +280,7 @@ def remove_conversation(
 
 
 # ---------------------------------------------------------
-# Chat
+# Chat: only access conversations owned by the signed-in user
 # ---------------------------------------------------------
 
 
@@ -231,36 +289,31 @@ def chat(
     payload: ChatRequest,
     request: Request,
 ):
-    owner_id, is_new = resolve_owner(request)
+    user = get_current_user(request)
     conversation_id = payload.conversation_id
 
-    # Verify ownership before starting the streamed response.
-    if conversation_id:
-        conversation = get_conversation(
-            owner_id,
-            conversation_id,
+    if not conversation_id or not get_conversation(
+        user["id"],
+        conversation_id,
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Choose a valid conversation before chatting.",
         )
-
-        if conversation is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Conversation not found.",
-            )
 
     def generate():
         try:
-            # Save the user's question before running the agent.
-            if conversation_id:
-                save_message(
-                    owner_id=owner_id,
-                    conversation_id=conversation_id,
-                    role="user",
-                    content=payload.question,
-                )
+            save_message(
+                user["id"],
+                conversation_id,
+                "user",
+                payload.question,
+            )
 
             initial = {
                 "question": payload.question,
                 "current_query": payload.question,
+                "user_id": user["id"],
                 "kb_docs": [],
                 "web_results": "",
                 "kb_grade": "",
@@ -302,17 +355,15 @@ def chat(
             except Exception:
                 logger.exception("Failed to write chat audit record")
 
-            # Save the assistant response to the conversation.
-            if conversation_id:
-                save_message(
-                    owner_id=owner_id,
-                    conversation_id=conversation_id,
-                    role="assistant",
-                    content=answer,
-                    source_used=source_used,
-                    citations=citations,
-                    trace=trace_items,
-                )
+            save_message(
+                user["id"],
+                conversation_id,
+                "assistant",
+                answer,
+                source_used,
+                citations,
+                trace_items,
+            )
 
             yield json.dumps(
                 {
@@ -329,7 +380,7 @@ def chat(
             ) + "\n"
 
         except Exception:
-            logger.exception("Chat request failed")
+            logger.exception("Agent chat request failed")
 
             yield json.dumps(
                 {
@@ -341,7 +392,7 @@ def chat(
                 }
             ) + "\n"
 
-    stream = StreamingResponse(
+    return StreamingResponse(
         generate(),
         media_type="application/x-ndjson",
         headers={
@@ -350,175 +401,409 @@ def chat(
         },
     )
 
-    set_owner_cookie(stream, request, owner_id, is_new)
-
-    return stream
-
 
 # ---------------------------------------------------------
-# HR document uploads
+# Company-wide documents: administrators only
 # ---------------------------------------------------------
 
 
-@router.post("/ingest")
-async def ingest(
+@router.get("/documents/company")
+def company_documents(request: Request):
+    user = get_current_user(request)
+    require_admin(user)
+
+    return {"documents": list_company_documents()}
+
+
+@router.post("/ingest", status_code=201)
+async def ingest_company_document(
+    request: Request,
     file: UploadFile = File(...),
-    x_admin_key: str = Header(default=""),
 ):
-    configured_key = settings.admin_api_key or ""
+    user = get_current_user(request)
+    require_admin(user)
 
-    if not configured_key or configured_key == DEFAULT_ADMIN_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Document uploads are not configured. " "Set a private ADMIN_API_KEY."
-            ),
-        )
+    filename = _safe_filename(file.filename)
+    document_id = uuid.uuid4().hex
 
-    if not hmac.compare_digest(
-        x_admin_key,
-        configured_key,
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid admin key",
-        )
-
-    original_name = Path((file.filename or "document").replace("\\", "/")).name
-
-    suffix = Path(original_name).suffix.lower()
-
-    if suffix not in SUPPORTED:
-        raise HTTPException(
-            status_code=400,
-            detail=("Supported file types: " f"{', '.join(sorted(SUPPORTED))}"),
-        )
-
-    stem = (
-        re.sub(
-            r"[^\w.-]+",
-            "_",
-            Path(original_name).stem,
-        ).strip(
-            "._"
-        )[:100]
-        or "document"
+    destination = (
+        Path(settings.upload_dir).resolve() / "company" / document_id / filename
     )
 
-    safe_filename = f"{stem}{suffix}"
-
-    upload_root = Path(settings.upload_dir).resolve()
-    upload_folder = upload_root / uuid.uuid4().hex
-    destination = upload_folder / safe_filename
+    size_bytes = await _save_upload(file, destination)
+    vector_ids: list[str] = []
 
     try:
-        upload_folder.mkdir(
-            parents=True,
-            exist_ok=False,
+        chunks = _load_and_chunk(destination)
+        vector_ids = [uuid.uuid4().hex for _ in chunks]
+
+        add_documents(
+            chunks,
+            namespace=settings.pinecone_namespace,
+            ids=vector_ids,
         )
 
-        written = 0
+        create_company_document(
+            document_id,
+            filename,
+            str(destination),
+            vector_ids,
+            size_bytes,
+            user["id"],
+        )
 
-        with destination.open("wb") as output:
-            while True:
-                chunk = await file.read(UPLOAD_READ_CHUNK_BYTES)
+    except Exception as exc:
+        logger.exception(
+            "Company document ingestion failed: %s",
+            filename,
+        )
 
-                if not chunk:
-                    break
+        rollback_failed = False
 
-                written += len(chunk)
+        if vector_ids:
+            try:
+                delete_vectors(
+                    vector_ids,
+                    namespace=settings.pinecone_namespace,
+                )
+            except Exception:
+                rollback_failed = True
+                logger.exception(
+                    "Company vector rollback failed. "
+                    "Document ID: %s, vector IDs: %s",
+                    document_id,
+                    vector_ids,
+                )
 
-                if written > MAX_UPLOAD_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=("The maximum document upload size " "is 10 MB."),
-                    )
-
-                output.write(chunk)
-
-        if written == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="The uploaded file is empty.",
+        try:
+            _remove_upload_files(destination)
+        except Exception:
+            rollback_failed = True
+            logger.exception(
+                "Company upload cleanup failed: %s",
+                document_id,
             )
 
-    except HTTPException:
-        shutil.rmtree(
-            upload_folder,
-            ignore_errors=True,
-        )
-        raise
+        if rollback_failed:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Upload failed and cleanup could not be completed. "
+                    "Check the server logs before retrying."
+                ),
+            ) from None
 
-    except Exception:
-        shutil.rmtree(
-            upload_folder,
-            ignore_errors=True,
-        )
-
-        logger.exception("Failed to save uploaded document")
+        if isinstance(exc, HTTPException):
+            raise
 
         raise HTTPException(
             status_code=500,
-            detail="Could not save the uploaded document.",
-        ) from None
-
-    finally:
-        await file.close()
-
-    try:
-        documents = load_file(destination)
-        chunks = chunk_documents(documents)
-
-        if not chunks:
-            shutil.rmtree(
-                upload_folder,
-                ignore_errors=True,
-            )
-
-            raise HTTPException(
-                status_code=400,
-                detail=("No readable text was found in this document."),
-            )
-
-    except HTTPException:
-        raise
-
-    except Exception:
-        shutil.rmtree(
-            upload_folder,
-            ignore_errors=True,
-        )
-
-        logger.exception(
-            "Failed to read uploaded document: %s",
-            safe_filename,
-        )
-
-        raise HTTPException(
-            status_code=400,
-            detail=("Could not read this file. Upload a valid " "supported document."),
-        ) from None
-
-    try:
-        ids = add_documents(chunks)
-
-    except Exception:
-        logger.exception(
-            "Failed to index uploaded document: %s",
-            safe_filename,
-        )
-
-        raise HTTPException(
-            status_code=503,
             detail=(
-                "The document was uploaded but could not be indexed. "
-                "Please try again later."
+                "The document could not be indexed. " "Check server logs and try again."
             ),
         ) from None
 
     return {
-        "message": "Document indexed",
-        "file": safe_filename,
+        "message": "Company document indexed",
+        "id": document_id,
+        "file": filename,
         "chunks": len(chunks),
-        "ids_created": len(ids),
     }
+
+
+@router.delete("/documents/company/{document_id}")
+def remove_company_document(
+    document_id: str,
+    request: Request,
+):
+    user = get_current_user(request)
+    require_admin(user)
+
+    record = get_company_document(document_id)
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Company document not found.",
+        )
+
+    try:
+        delete_vectors(
+            record["vector_ids"],
+            namespace=settings.pinecone_namespace,
+        )
+
+        _remove_upload_files(Path(record["storage_path"]))
+
+        delete_company_document_record(document_id)
+
+    except Exception:
+        logger.exception(
+            "Could not delete company document %s",
+            document_id,
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=("The document could not be fully deleted. " "Check server logs."),
+        ) from None
+
+    return {
+        "deleted": True,
+        "id": document_id,
+    }
+
+
+# ---------------------------------------------------------
+# Personal documents: owner-only access
+# ---------------------------------------------------------
+
+
+@router.get("/documents/personal")
+def personal_documents(request: Request):
+    user = get_current_user(request)
+
+    return {"documents": list_personal_documents(user["id"])}
+
+
+@router.post("/documents/personal", status_code=201)
+async def ingest_personal_document(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    user = get_current_user(request)
+
+    filename = _safe_filename(file.filename)
+    document_id = uuid.uuid4().hex
+    namespace = f"user-{user['id']}"
+
+    destination = (
+        Path(settings.upload_dir).resolve()
+        / "users"
+        / user["id"]
+        / document_id
+        / filename
+    )
+
+    size_bytes = await _save_upload(file, destination)
+    vector_ids: list[str] = []
+
+    try:
+        chunks = _load_and_chunk(destination)
+        vector_ids = [uuid.uuid4().hex for _ in chunks]
+
+        add_documents(
+            chunks,
+            namespace=namespace,
+            ids=vector_ids,
+        )
+
+        create_personal_document(
+            document_id,
+            user["id"],
+            filename,
+            str(destination),
+            namespace,
+            vector_ids,
+            size_bytes,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "Personal document ingestion failed for user %s",
+            user["id"],
+        )
+
+        rollback_failed = False
+
+        if vector_ids:
+            try:
+                delete_vectors(
+                    vector_ids,
+                    namespace=namespace,
+                )
+            except Exception:
+                rollback_failed = True
+                logger.exception(
+                    "Private vector rollback failed. "
+                    "User ID: %s, document ID: %s, vector IDs: %s",
+                    user["id"],
+                    document_id,
+                    vector_ids,
+                )
+
+        try:
+            _remove_upload_files(destination)
+        except Exception:
+            rollback_failed = True
+            logger.exception(
+                "Private upload cleanup failed for user %s, document %s",
+                user["id"],
+                document_id,
+            )
+
+        if rollback_failed:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Upload failed and cleanup could not be completed. "
+                    "Check the server logs before retrying."
+                ),
+            ) from None
+
+        if isinstance(exc, HTTPException):
+            raise
+
+        raise HTTPException(
+            status_code=500,
+            detail=("The private document could not be indexed. " "Please try again."),
+        ) from None
+
+    return {
+        "message": "Private document indexed",
+        "id": document_id,
+        "file": filename,
+        "chunks": len(chunks),
+    }
+
+
+@router.delete("/documents/personal/{document_id}")
+def remove_personal_document(
+    document_id: str,
+    request: Request,
+):
+    user = get_current_user(request)
+
+    record = get_personal_document(
+        document_id,
+        user["id"],
+    )
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Private document not found.",
+        )
+
+    try:
+        delete_vectors(
+            record["vector_ids"],
+            namespace=record["namespace"],
+        )
+
+        _remove_upload_files(Path(record["storage_path"]))
+
+        delete_personal_document_record(
+            document_id,
+            user["id"],
+        )
+
+    except Exception:
+        logger.exception(
+            "Could not delete private document %s",
+            document_id,
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=("The document could not be fully deleted. " "Check server logs."),
+        ) from None
+
+    return {
+        "deleted": True,
+        "id": document_id,
+    }
+
+
+# ---------------------------------------------------------
+# Guest chat: public web only, no stored conversation history
+# ---------------------------------------------------------
+
+GUEST_REQUESTS_PER_MINUTE = 10
+_guest_request_times: dict[str, list[float]] = {}
+_guest_rate_lock = threading.Lock()
+
+
+def _check_guest_rate_limit(request: Request) -> None:
+    # Use the direct client address, not an untrusted forwarded header.
+    client_ip = request.client.host if request.client else "unknown"
+
+    now = time.monotonic()
+    cutoff = now - 60
+
+    with _guest_rate_lock:
+        previous = [
+            value for value in _guest_request_times.get(client_ip, []) if value > cutoff
+        ]
+
+        if len(previous) >= GUEST_REQUESTS_PER_MINUTE:
+            _guest_request_times[client_ip] = previous
+
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Guest request limit reached. " "Please try again in a minute."
+                ),
+            )
+
+        previous.append(now)
+        _guest_request_times[client_ip] = previous
+
+
+@router.post("/guest/chat")
+def guest_chat(
+    payload: GuestChatRequest,
+    request: Request,
+):
+    _check_guest_rate_limit(request)
+
+    def generate():
+        try:
+            yield json.dumps(
+                {
+                    "type": "trace",
+                    "node": "guest_public_search",
+                }
+            ) + "\n"
+
+            result = answer_guest_question(payload.question)
+
+            for step in result.get("trace", []):
+                yield json.dumps(
+                    {
+                        "type": "trace",
+                        "node": step,
+                    }
+                ) + "\n"
+
+            yield json.dumps(
+                {
+                    "type": "final",
+                    "answer": result["answer"],
+                    "source_used": result["source_used"],
+                    "citations": result.get("citations", []),
+                    "trace": result.get("trace", []),
+                }
+            ) + "\n"
+
+        except Exception:
+            logger.exception("Guest chat request failed")
+
+            yield json.dumps(
+                {
+                    "type": "error",
+                    "detail": (
+                        "Guest search is temporarily unavailable. "
+                        "Please try again later."
+                    ),
+                }
+            ) + "\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

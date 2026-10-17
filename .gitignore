@@ -1,5 +1,16 @@
+# Python
 .venv/
-.ipynb_checkpoints/
-.env
 __pycache__/
-data/conversations.db
+*.py[cod]
+.ipynb_checkpoints/
+
+# Secrets
+.env
+
+# Local SQLite databases and SQLite auxiliary files
+data/*.db
+data/*.db-*
+
+# Private uploaded files
+uploads/users/
+uploads/company/

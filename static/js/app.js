@@ -13,6 +13,7 @@ const newChatBtn = document.getElementById("newChatBtn");
 const historyNewChat = document.getElementById("historyNewChat");
 const closeHistory = document.getElementById("closeHistory");
 const refreshHistoryBtn = document.getElementById("refreshHistory");
+
 const conversationActionModal = document.getElementById(
   "conversationActionModal",
 );
@@ -44,16 +45,28 @@ const cancelConversationAction = document.getElementById(
   "cancelConversationAction",
 );
 
-let pendingConversationAction = null;
-let actionSaving = false;
-const initialWelcomeMarkup = chat.innerHTML;
+const uploadModal = document.getElementById("uploadModal");
+const fileInput = document.getElementById("fileInput");
+const fileLabel = document.getElementById("fileLabel");
+const uploadButton = document.getElementById("uploadBtn");
+const uploadScope = document.getElementById("uploadScope");
+const uploadStatus = document.getElementById("uploadStatus");
+const personalDocumentsList = document.getElementById("personalDocumentsList");
+const companyDocumentsList = document.getElementById("companyDocumentsList");
+const personalDocsPanel = document.getElementById("personalDocsPanel");
+const companyDocsPanel = document.getElementById("companyDocsPanel");
 
 let requestInProgress = false;
 let currentConversationId = null;
 let conversations = [];
+let pendingConversationAction = null;
+let actionSaving = false;
+let uploadInProgress = false;
+
+const initialWelcomeMarkup = chat.innerHTML;
 
 const SOURCE_LABELS = {
-  private_kb: "Company Knowledge Base",
+  private_kb: "Company & Personal Knowledge Base",
   web_search: "External Web Search",
   web: "External Web Search",
   direct: "Direct Response",
@@ -64,12 +77,12 @@ const SOURCE_LABELS = {
 
 const TRACE_NODE_LABELS = {
   route_question: "Route question",
-  retrieve_kb: "Retrieve private knowledge base",
+  retrieve_kb: "Retrieve company and personal knowledge",
   grade_kb: "Evaluate private KB evidence",
   search_web: "Search public web with Tavily",
   grade_web: "Evaluate web evidence",
   rewrite_query: "Rewrite query and retry",
-  generate_from_kb: "Generate answer from private KB",
+  generate_from_kb: "Generate answer from knowledge base",
   generate_from_web: "Generate answer from web sources",
   direct_answer: "Generate direct response",
   insufficient: "Stop: insufficient evidence",
@@ -77,7 +90,7 @@ const TRACE_NODE_LABELS = {
 
 function escapeHtml(value = "") {
   return String(value).replace(
-    /[&<>'"]/g,
+    /[&<>\'"]/g,
     (character) =>
       ({
         "&": "&amp;",
@@ -94,34 +107,15 @@ function formatSource(value = "") {
     .trim()
     .toLowerCase();
 
-  if (!key) return "Unknown";
-
-  return SOURCE_LABELS[key] || String(value).replace(/_/g, " ");
+  return key
+    ? SOURCE_LABELS[key] || String(value).replace(/_/g, " ")
+    : "Unknown";
 }
 
 function formatTraceNode(value = "") {
   const key = String(value || "").trim();
 
   return TRACE_NODE_LABELS[key] || key.replace(/_/g, " ");
-}
-
-function cleanCitationTitle(citation = {}) {
-  const title = String(citation.title || citation.url || "Source").trim();
-
-  const looksLikeLocalPath =
-    citation.type === "private_kb" ||
-    /^[a-z]:[\\/]/i.test(title) ||
-    title.startsWith("/") ||
-    title.includes("\\");
-
-  if (looksLikeLocalPath) {
-    return (
-      title.replace(/\\/g, "/").split("/").filter(Boolean).pop() ||
-      "Company document"
-    );
-  }
-
-  return title;
 }
 
 function safeExternalUrl(value) {
@@ -132,14 +126,25 @@ function safeExternalUrl(value) {
   try {
     const url = new URL(value, window.location.origin);
 
-    if (!["http:", "https:"].includes(url.protocol)) {
-      return "";
-    }
-
-    return url.href;
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
   } catch {
     return "";
   }
+}
+
+function cleanCitationTitle(citation = {}) {
+  const title = String(citation.title || citation.url || "Source").trim();
+
+  const localPath =
+    citation.type === "private_kb" ||
+    /^[a-z]:[\\/]/i.test(title) ||
+    title.startsWith("/") ||
+    title.includes("\\");
+
+  return localPath
+    ? title.replace(/\\/g, "/").split("/").filter(Boolean).pop() ||
+        "Company document"
+    : title;
 }
 
 function formatText(value = "") {
@@ -161,20 +166,19 @@ async function apiRequest(url, options = {}) {
     },
   });
 
-  if (!response.ok) {
-    let message = `Request failed (${response.status}).`;
+  let data = {};
 
-    try {
-      const data = await response.json();
-      message = data.detail || message;
-    } catch {
-      // Keep the generic error message.
-    }
-
-    throw new Error(message);
+  try {
+    data = await response.json();
+  } catch {
+    // The response may not contain JSON.
   }
 
-  return response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || `Request failed (${response.status}).`);
+  }
+
+  return data;
 }
 
 function scrollLatestIntoView(element = chat) {
@@ -205,16 +209,17 @@ function addMessage(role, text, source = "", citations = []) {
 
   wrap.className = `message ${role === "user" ? "user" : "assistant"}`;
 
-  const citationItems = Array.isArray(citations) ? citations : [];
+  const items = Array.isArray(citations) ? citations : [];
 
-  const citationHtml = citationItems.length
+  const citationsHtml = items.length
     ? `
       <div class="citations">
         <strong>Sources</strong>
         <div class="source-list">
-          ${citationItems
+          ${items
             .map((citation) => {
               const title = escapeHtml(cleanCitationTitle(citation || {}));
+
               const url = safeExternalUrl(citation?.url);
 
               return `
@@ -223,8 +228,8 @@ function addMessage(role, text, source = "", citations = []) {
                 ${
                   url
                     ? `<a href="${escapeHtml(url)}"
-                         target="_blank"
-                         rel="noopener noreferrer">${title}</a>`
+                           target="_blank"
+                           rel="noopener noreferrer">${title}</a>`
                     : `<span>${title}</span>`
                 }
               </div>
@@ -236,7 +241,7 @@ function addMessage(role, text, source = "", citations = []) {
     `
     : "";
 
-  const messageContent =
+  const body =
     role === "user"
       ? escapeHtml(text).replace(/\n/g, "<br>")
       : formatText(text);
@@ -250,13 +255,14 @@ function addMessage(role, text, source = "", citations = []) {
       ${role === "user" ? "You" : "AI"}
     </div>
     <div class="bubble">
-      ${messageContent}
+      ${body}
       ${sourceHtml}
-      ${citationHtml}
+      ${citationsHtml}
     </div>
   `;
 
   chat.appendChild(wrap);
+
   scrollLatestIntoView(wrap);
 
   return wrap;
@@ -268,12 +274,12 @@ function renderTrace(items = [], running = false) {
   trace.innerHTML = safeItems.length
     ? safeItems
         .map((item, index) => {
-          const isActive = running && index === safeItems.length - 1;
+          const active = running && index === safeItems.length - 1;
 
           return `
-          <div class="trace-item ${isActive ? "active" : "completed"}">
+          <div class="trace-item ${active ? "active" : "completed"}">
             <span class="trace-dot" aria-hidden="true">
-              ${isActive ? "•" : "✓"}
+              ${active ? "•" : "✓"}
             </span>
             <span>${escapeHtml(String(item))}</span>
           </div>
@@ -324,9 +330,14 @@ function closeHistoryModal() {
   historyModal.classList.add("hidden");
 }
 
-function openHistoryModal() {
+async function openHistoryModal() {
   historyModal.classList.remove("hidden");
-  refreshHistory();
+
+  try {
+    await refreshHistory();
+  } catch {
+    // Error details are shown in the dialog.
+  }
 }
 
 function formatDate(value) {
@@ -334,9 +345,7 @@ function formatDate(value) {
 
   const date = new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
+  if (Number.isNaN(date.getTime())) return "";
 
   return date.toLocaleString([], {
     month: "short",
@@ -346,7 +355,9 @@ function formatDate(value) {
   });
 }
 
-// ---------- Conversation History ----------
+// ---------------------------------------------------------
+// Conversation history
+// ---------------------------------------------------------
 
 async function refreshHistory(showStatus = true) {
   if (showStatus) {
@@ -391,17 +402,13 @@ function renderHistory() {
     .map((item) => {
       const id = escapeHtml(item.id);
       const title = escapeHtml(item.title || "New chat");
-
       const count = Number(item.message_count || 0);
-
-      const messageLabel = `${count} message${count === 1 ? "" : "s"}`;
-
       const updated = formatDate(item.updated_at);
 
-      const isCurrent = item.id === currentConversationId;
-
       return `
-      <div class="history-item ${isCurrent ? "current" : ""}">
+      <div class="history-item ${
+        item.id === currentConversationId ? "current" : ""
+      }">
         <button
           type="button"
           class="history-open"
@@ -411,7 +418,9 @@ function renderHistory() {
         >
           <span class="history-title">${title}</span>
           <span class="history-meta">
-            ${messageLabel}${updated ? ` · ${escapeHtml(updated)}` : ""}
+            ${count} message${count === 1 ? "" : "s"}${
+              updated ? ` · ${escapeHtml(updated)}` : ""
+            }
           </span>
         </button>
 
@@ -444,13 +453,11 @@ async function createNewChat() {
       method: "POST",
     });
 
-    const conversation = data.conversation;
-
-    if (!conversation?.id) {
-      throw new Error("The server did not return a conversation ID.");
+    if (!data.conversation?.id) {
+      throw new Error("Server did not return a conversation ID.");
     }
 
-    currentConversationId = conversation.id;
+    currentConversationId = data.conversation.id;
 
     resetChatUI();
     closeHistoryModal();
@@ -498,6 +505,7 @@ async function openConversation(conversationId) {
 
       if (lastAssistant) {
         renderTrace(lastAssistant.trace || [], false);
+
         sourceUsed.textContent = formatSource(lastAssistant.source_used || "");
       } else {
         renderTrace([], false);
@@ -516,9 +524,9 @@ async function openConversation(conversationId) {
 }
 
 function openConversationAction(type, conversationId) {
-  const conversation = conversations.find((item) => item.id === conversationId);
+  const item = conversations.find((row) => row.id === conversationId);
 
-  if (!conversation || actionSaving) return;
+  if (!item || actionSaving) return;
 
   const isRename = type === "rename";
 
@@ -533,11 +541,11 @@ function openConversationAction(type, conversationId) {
 
   conversationActionDescription.textContent = isRename
     ? "Choose a name that's easy to recognize later."
-    : `Delete "${conversation.title || "New chat"}" and all its saved messages? This action cannot be undone.`;
+    : `Delete “${item.title || "New chat"}” and all its saved messages? This cannot be undone.`;
 
   conversationRenameFields.hidden = !isRename;
 
-  conversationActionInput.value = isRename ? conversation.title || "" : "";
+  conversationActionInput.value = isRename ? item.title || "" : "";
 
   conversationActionError.textContent = "";
 
@@ -567,13 +575,22 @@ function closeConversationActionDialog() {
   conversationActionError.textContent = "";
 }
 
-function renameConversation(conversationId) {
-  openConversationAction("rename", conversationId);
-}
+historyList.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-history-action]");
 
-function deleteConversation(conversationId) {
-  openConversationAction("delete", conversationId);
-}
+  if (!button) return;
+
+  const action = button.dataset.historyAction;
+  const id = button.dataset.id;
+
+  if (!id) return;
+
+  if (action === "open") {
+    await openConversation(id);
+  } else if (action === "rename" || action === "delete") {
+    openConversationAction(action, id);
+  }
+});
 
 conversationActionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -581,12 +598,12 @@ conversationActionForm.addEventListener("submit", async (event) => {
   if (!pendingConversationAction || actionSaving) return;
 
   const { type, conversationId } = pendingConversationAction;
-
   const isRename = type === "rename";
   const title = conversationActionInput.value.trim();
 
   if (isRename && !title) {
     conversationActionError.textContent = "Please enter a conversation name.";
+
     conversationActionInput.focus();
     return;
   }
@@ -594,10 +611,12 @@ conversationActionForm.addEventListener("submit", async (event) => {
   if (isRename && title.length > 80) {
     conversationActionError.textContent =
       "The name must be 80 characters or fewer.";
+
     return;
   }
 
   actionSaving = true;
+
   confirmConversationAction.disabled = true;
   cancelConversationAction.disabled = true;
   closeConversationAction.disabled = true;
@@ -607,10 +626,10 @@ conversationActionForm.addEventListener("submit", async (event) => {
   conversationActionError.textContent = "";
 
   try {
-    const encodedId = encodeURIComponent(conversationId);
+    const encoded = encodeURIComponent(conversationId);
 
     if (isRename) {
-      await apiRequest(`/api/conversations/${encodedId}`, {
+      await apiRequest(`/api/conversations/${encoded}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -618,7 +637,7 @@ conversationActionForm.addEventListener("submit", async (event) => {
         body: JSON.stringify({ title }),
       });
     } else {
-      await apiRequest(`/api/conversations/${encodedId}`, {
+      await apiRequest(`/api/conversations/${encoded}`, {
         method: "DELETE",
       });
 
@@ -671,35 +690,13 @@ conversationActionModal.addEventListener("click", (event) => {
   }
 });
 
-// Delegate history actions so the buttons continue working after re-render.
-historyList.addEventListener("click", async (event) => {
-  const button = event.target.closest("[data-history-action]");
-
-  if (!button) return;
-
-  const action = button.dataset.historyAction;
-  const id = button.dataset.id;
-
-  if (!id) return;
-
-  if (action === "open") {
-    await openConversation(id);
-  } else if (action === "rename") {
-    await renameConversation(id);
-  } else if (action === "delete") {
-    await deleteConversation(id);
-  }
-});
-
 historyToggle.addEventListener("click", openHistoryModal);
-
 newChatBtn.addEventListener("click", createNewChat);
 historyNewChat.addEventListener("click", createNewChat);
-
 closeHistory.addEventListener("click", closeHistoryModal);
 
 refreshHistoryBtn.addEventListener("click", () => {
-  refreshHistory();
+  refreshHistory().catch(() => {});
 });
 
 historyModal.addEventListener("click", (event) => {
@@ -712,27 +709,153 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeConversationActionDialog();
     closeHistoryModal();
-    document.getElementById("uploadModal")?.classList.add("hidden");
+    uploadModal.classList.add("hidden");
   }
 });
 
-// ---------- Agent Chat ----------
+// ---------------------------------------------------------
+// Streaming chat
+// ---------------------------------------------------------
 
+async function askGuestAgent(userQuestion) {
+  setRequestBusy(true);
+
+  try {
+    document.getElementById("welcomeState")?.remove();
+    document.getElementById("chatExamples")?.classList.add("hidden");
+
+    addMessage("user", userQuestion);
+    question.value = "";
+
+    showTypingIndicator();
+
+    renderTrace(["Starting temporary guest session…"], true);
+    sourceUsed.textContent = "Public Web Search";
+
+    const response = await fetch("/api/guest/chat", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        question: userQuestion,
+      }),
+    });
+
+    if (!response.ok) {
+      let message = `Request failed (${response.status}).`;
+
+      try {
+        message = (await response.json()).detail || message;
+      } catch {
+        // Keep the generic error.
+      }
+
+      throw new Error(message);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    let buffer = "";
+    let finalData = null;
+    const streamedTrace = [];
+
+    function handleGuestLine(line) {
+      if (!line.trim()) return;
+
+      const event = JSON.parse(line);
+
+      if (event.type === "trace") {
+        streamedTrace.push(
+          `Guest → ${formatTraceNode(event.node || "Public search")}`,
+        );
+
+        renderTrace(streamedTrace, true);
+      } else if (event.type === "final") {
+        finalData = event;
+      } else if (event.type === "error") {
+        throw new Error(event.detail || "Guest search could not complete.");
+      }
+    }
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          handleGuestLine(line);
+        }
+      }
+
+      buffer += decoder.decode();
+
+      if (buffer.trim()) {
+        handleGuestLine(buffer);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (!finalData) {
+      throw new Error("No answer was returned. Please try again.");
+    }
+
+    hideTypingIndicator();
+
+    addMessage(
+      "assistant",
+      finalData.answer || "No answer was returned.",
+      finalData.source_used || "web_search",
+      finalData.citations || [],
+    );
+
+    renderTrace(finalData.trace || streamedTrace, false);
+
+    sourceUsed.textContent = formatSource(
+      finalData.source_used || "web_search",
+    );
+  } catch (error) {
+    hideTypingIndicator();
+
+    addMessage(
+      "assistant",
+      `**Guest chat error:** ${error.message || "Please try again."}`,
+    );
+
+    renderTrace(["Guest request failed"], false);
+    sourceUsed.textContent = "Error";
+  } finally {
+    hideTypingIndicator();
+    setRequestBusy(false);
+  }
+}
 async function askAgent(rawQuestion) {
   const userQuestion = String(rawQuestion || "").trim();
 
   if (!userQuestion || requestInProgress) return;
+  if (window.hrmindCurrentUser?.role === "guest") {
+    await askGuestAgent(userQuestion);
+    return;
+  }
 
   setRequestBusy(true);
 
   try {
-    // Create a conversation if the user starts chatting before one is selected.
     if (!currentConversationId) {
-      const data = await apiRequest("/api/conversations", {
+      const created = await apiRequest("/api/conversations", {
         method: "POST",
       });
 
-      currentConversationId = data.conversation.id;
+      currentConversationId = created.conversation.id;
 
       resetChatUI();
 
@@ -744,7 +867,6 @@ async function askAgent(rawQuestion) {
     document.getElementById("chatExamples")?.classList.remove("hidden");
 
     addMessage("user", userQuestion);
-
     question.value = "";
 
     showTypingIndicator();
@@ -752,122 +874,118 @@ async function askAgent(rawQuestion) {
     renderTrace(["Starting LangGraph workflow…"], true);
     sourceUsed.textContent = "Running…";
 
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        question: userQuestion,
+        conversation_id: currentConversationId,
+      }),
+    });
+
+    if (!response.ok) {
+      let message = `Request failed (${response.status}).`;
+
+      try {
+        message = (await response.json()).detail || message;
+      } catch {
+        // Keep the default error message.
+      }
+
+      throw new Error(message);
+    }
+
+    if (!response.body) {
+      throw new Error("Streaming is not available for this response.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    let buffer = "";
+    let finalData = null;
+
     const streamedTrace = [];
 
-    let finalData = null;
-    let reader = null;
+    function handleLine(line) {
+      if (!line.trim()) return;
+
+      let event;
+
+      try {
+        event = JSON.parse(line);
+      } catch {
+        throw new Error("The server returned an invalid streaming response.");
+      }
+
+      if (event.type === "trace") {
+        streamedTrace.push(
+          `Running → ${formatTraceNode(event.node || "Workflow step")}`,
+        );
+
+        renderTrace(streamedTrace, true);
+      } else if (event.type === "final") {
+        finalData = event;
+      } else if (event.type === "error") {
+        throw new Error(
+          event.detail || "The agent could not complete this request.",
+        );
+      }
+    }
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: userQuestion,
-          conversation_id: currentConversationId,
-        }),
-      });
-
-      if (!response.ok) {
-        let message = `Request failed (${response.status}).`;
-
-        try {
-          const data = await response.json();
-          message = data.detail || message;
-        } catch {
-          // Keep the default message.
-        }
-
-        throw new Error(message);
-      }
-
-      if (!response.body) {
-        throw new Error("Streaming is not available for this response.");
-      }
-
-      reader = response.body.getReader();
-
-      const decoder = new TextDecoder();
-
-      let buffer = "";
-
-      function handleStreamLine(line) {
-        if (!line.trim()) return;
-
-        let event;
-
-        try {
-          event = JSON.parse(line);
-        } catch {
-          throw new Error("The server returned an invalid stream event.");
-        }
-
-        if (event.type === "trace") {
-          streamedTrace.push(
-            `Running → ${formatTraceNode(event.node || "Workflow step")}`,
-          );
-
-          renderTrace(streamedTrace, true);
-        } else if (event.type === "final") {
-          finalData = event;
-        } else if (event.type === "error") {
-          throw new Error(
-            event.detail || "The agent could not complete this request.",
-          );
-        }
-      }
-
       while (true) {
         const { value, done } = await reader.read();
 
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        buffer += decoder.decode(value, {
+          stream: true,
+        });
 
         const lines = buffer.split("\n");
 
         buffer = lines.pop() || "";
 
         for (const line of lines) {
-          handleStreamLine(line);
+          handleLine(line);
         }
       }
 
       buffer += decoder.decode();
 
       if (buffer.trim()) {
-        handleStreamLine(buffer);
+        handleLine(buffer);
       }
-
-      if (!finalData) {
-        throw new Error(
-          "The agent finished without returning a final answer. Please try again.",
-        );
-      }
-
-      hideTypingIndicator();
-
-      addMessage(
-        "assistant",
-        finalData.answer || "The agent returned an empty answer.",
-        finalData.source_used || "",
-        finalData.citations || [],
-      );
-
-      renderTrace(finalData.trace || streamedTrace, false);
-
-      sourceUsed.textContent = formatSource(finalData.source_used || "");
     } finally {
-      if (reader) {
-        try {
-          reader.releaseLock();
-        } catch {
-          // The reader may already be released.
-        }
+      try {
+        reader.releaseLock();
+      } catch {
+        // Reader already released.
       }
     }
+
+    if (!finalData) {
+      throw new Error(
+        "The agent ended without a final answer. Please try again.",
+      );
+    }
+
+    hideTypingIndicator();
+
+    addMessage(
+      "assistant",
+      finalData.answer || "The agent returned an empty answer.",
+      finalData.source_used || "",
+      finalData.citations || [],
+    );
+
+    renderTrace(finalData.trace || streamedTrace, false);
+
+    sourceUsed.textContent = formatSource(finalData.source_used || "");
   } catch (error) {
     hideTypingIndicator();
 
@@ -882,19 +1000,16 @@ async function askAgent(rawQuestion) {
     sourceUsed.textContent = "Error";
   } finally {
     hideTypingIndicator();
-
     setRequestBusy(false);
 
-    // Refresh conversation titles and message counts after each request.
     try {
       await refreshHistory(false);
     } catch {
-      // A history refresh failure should not remove the chat answer.
+      // Keep the completed chat visible if history refresh fails.
     }
   }
 }
 
-// Enter submits. Shift + Enter adds a line break.
 question.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -913,7 +1028,6 @@ form.addEventListener("submit", (event) => {
   }
 });
 
-// Suggested questions, including those in the welcome screen.
 document.addEventListener("click", (event) => {
   const button = event.target.closest(".example");
 
@@ -924,75 +1038,213 @@ document.addEventListener("click", (event) => {
   askAgent(button.dataset.question || button.textContent.trim());
 });
 
-// ---------- HR Document Upload ----------
+// ---------------------------------------------------------
+// Company and personal document management
+// ---------------------------------------------------------
 
-const uploadModal = document.getElementById("uploadModal");
-const fileInput = document.getElementById("fileInput");
-const fileLabel = document.getElementById("fileLabel");
-const uploadButton = document.getElementById("uploadBtn");
+function updateDocumentScopeUI() {
+  const isAdmin = window.hrmindCurrentUser?.role === "admin";
+  const scope = uploadScope.value;
+
+  companyDocsPanel.classList.toggle(
+    "hidden",
+    !(isAdmin && scope === "company"),
+  );
+
+  personalDocsPanel.classList.toggle("hidden", scope !== "personal");
+
+  document.getElementById("uploadDescription").textContent =
+    scope === "company"
+      ? "This document becomes available to all verified employees in the company HR knowledge base."
+      : "This document is private to your account and is searchable only in your own conversations.";
+}
+
+function renderDocumentList(container, docs, kind) {
+  if (!docs.length) {
+    container.innerHTML = '<div class="empty">No documents uploaded yet.</div>';
+
+    return;
+  }
+
+  container.innerHTML = docs
+    .map(
+      (doc) => `
+    <div class="document-item">
+      <div class="document-item-info">
+        <strong>${escapeHtml(doc.filename || "Document")}</strong>
+        <span>
+          ${(Number(doc.size_bytes || 0) / 1024).toFixed(0)} KB
+          · ${escapeHtml(formatDate(doc.created_at) || "Recently added")}
+        </span>
+      </div>
+
+      <button
+        class="document-delete-btn"
+        type="button"
+        data-document-kind="${kind}"
+        data-document-id="${escapeHtml(doc.id)}"
+      >Delete</button>
+    </div>
+  `,
+    )
+    .join("");
+}
+
+async function refreshDocuments() {
+  const user = window.hrmindCurrentUser;
+
+  if (!user) return;
+
+  personalDocumentsList.innerHTML =
+    '<div class="empty">Loading documents…</div>';
+
+  try {
+    const personal = await apiRequest("/api/documents/personal");
+
+    renderDocumentList(
+      personalDocumentsList,
+      personal.documents || [],
+      "personal",
+    );
+  } catch (error) {
+    personalDocumentsList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+  }
+
+  if (user.role === "admin") {
+    try {
+      const company = await apiRequest("/api/documents/company");
+
+      renderDocumentList(
+        companyDocumentsList,
+        company.documents || [],
+        "company",
+      );
+    } catch (error) {
+      companyDocumentsList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    }
+  }
+
+  updateDocumentScopeUI();
+}
+
+uploadScope.addEventListener("change", updateDocumentScopeUI);
+
+document.getElementById("openUpload").addEventListener("click", async () => {
+  uploadModal.classList.remove("hidden");
+
+  fileInput.value = "";
+  fileLabel.textContent = "Choose HR document";
+  uploadStatus.textContent = "";
+
+  updateDocumentScopeUI();
+
+  await refreshDocuments();
+});
+
+document
+  .getElementById("closeUpload")
+  .addEventListener("click", () => uploadModal.classList.add("hidden"));
 
 fileInput.addEventListener("change", () => {
   fileLabel.textContent = fileInput.files?.[0]?.name || "Choose HR document";
 });
 
-document.getElementById("openUpload").addEventListener("click", () => {
-  uploadModal.classList.remove("hidden");
-});
-
-document.getElementById("closeUpload").addEventListener("click", () => {
-  uploadModal.classList.add("hidden");
-});
-
 uploadButton.addEventListener("click", async () => {
+  if (uploadInProgress) return;
+
   const file = fileInput.files?.[0];
-  const key = document.getElementById("adminKey").value;
-  const status = document.getElementById("uploadStatus");
 
   if (!file) {
-    status.textContent = "Choose a file first.";
+    uploadStatus.textContent = "Choose a file first.";
     return;
   }
 
-  const formData = new FormData();
-  formData.append("file", file);
+  if (file.size > 10 * 1024 * 1024) {
+    uploadStatus.textContent = "Maximum upload size is 10 MB.";
+    return;
+  }
 
+  const scope = uploadScope.value;
+  const user = window.hrmindCurrentUser;
+
+  if (scope === "company" && user?.role !== "admin") {
+    uploadStatus.textContent =
+      "Only administrators can upload company-wide documents.";
+    return;
+  }
+
+  const endpoint =
+    scope === "company" ? "/api/ingest" : "/api/documents/personal";
+
+  const body = new FormData();
+  body.append("file", file);
+
+  uploadInProgress = true;
   uploadButton.disabled = true;
-  uploadButton.textContent = "Submitting…";
-  status.textContent = "Submitting document…";
+  uploadButton.textContent = "Uploading and indexing…";
+
+  uploadStatus.textContent =
+    "Uploading document and preparing searchable chunks…";
 
   try {
-    const response = await fetch("/api/ingest", {
+    const result = await apiRequest(endpoint, {
       method: "POST",
-      headers: {
-        "X-Admin-Key": key,
-      },
-      body: formData,
+      body,
     });
 
-    const responseText = await response.text();
+    uploadStatus.textContent = `✓ ${result.file || file.name} indexed successfully.`;
 
-    let data = {};
+    fileInput.value = "";
+    fileLabel.textContent = "Choose HR document";
 
-    try {
-      data = responseText ? JSON.parse(responseText) : {};
-    } catch {
-      throw new Error("The server returned an unreadable response.");
-    }
-
-    if (!response.ok) {
-      throw new Error(data.detail || `Upload failed (${response.status}).`);
-    }
-
-    status.textContent = "✓ Document submitted successfully";
+    await refreshDocuments();
   } catch (error) {
-    status.textContent = `Error: ${error.message || "Upload failed."}`;
+    uploadStatus.textContent = `Error: ${error.message || "Upload failed."}`;
   } finally {
+    uploadInProgress = false;
     uploadButton.disabled = false;
-    uploadButton.textContent = "Submit Document";
+    uploadButton.textContent = "Upload and index";
   }
 });
 
-// ---------- Typing Indicator ----------
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-document-kind]");
+
+  if (!button) return;
+
+  const kind = button.dataset.documentKind;
+  const id = button.dataset.documentId;
+  const isCompany = kind === "company";
+
+  if (
+    !window.confirm(
+      `Delete this ${isCompany ? "company-wide" : "private"} document and its indexed chunks?`,
+    )
+  ) {
+    return;
+  }
+
+  button.disabled = true;
+
+  try {
+    await apiRequest(
+      `/api/documents/${isCompany ? "company" : "personal"}/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+
+    uploadStatus.textContent = "Document deleted.";
+
+    await refreshDocuments();
+  } catch (error) {
+    uploadStatus.textContent = `Could not delete document: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------
+// Typing indicator
+// ---------------------------------------------------------
 
 function showTypingIndicator() {
   hideTypingIndicator();
@@ -1011,9 +1263,7 @@ function showTypingIndicator() {
       <div class="typing-indicator">
         <span>HR Mind AI is thinking</span>
         <div class="typing-dots" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span></span>
+          <span></span><span></span><span></span>
         </div>
       </div>
     </div>
@@ -1028,25 +1278,112 @@ function hideTypingIndicator() {
   document.getElementById("typingIndicator")?.remove();
 }
 
-// ---------- Startup ----------
+// ---------------------------------------------------------
+// Initialization and account switching
+// ---------------------------------------------------------
 
 async function initializeApp() {
   try {
     const items = await refreshHistory(false);
 
     if (items.length) {
-      // Restore the most recently updated conversation on page refresh.
       await openConversation(items[0].id);
     } else {
+      currentConversationId = null;
       resetChatUI();
     }
+
+    await refreshDocuments();
   } catch {
+    currentConversationId = null;
     resetChatUI();
-    setHistoryStatus(
-      "History is unavailable. You can still try starting a new chat.",
-      true,
-    );
   }
 }
 
-initializeApp();
+window.addEventListener("hrmind:authenticated", () => {
+  initializeApp();
+});
+
+window.addEventListener("hrmind:loggedout", () => {
+  currentConversationId = null;
+  conversations = [];
+
+  chat.innerHTML = initialWelcomeMarkup;
+
+  renderTrace([], false);
+  sourceUsed.textContent = "—";
+
+  historyModal.classList.add("hidden");
+  uploadModal.classList.add("hidden");
+  conversationActionModal.classList.add("hidden");
+});
+
+function initializeGuestMode() {
+  currentConversationId = null;
+  conversations = [];
+
+  resetChatUI();
+
+  document.getElementById("historyToggle").classList.add("hidden");
+  document.getElementById("newChatBtn").classList.add("hidden");
+  document.getElementById("openUpload").classList.add("hidden");
+  document.getElementById("manageUsersHeaderBtn").classList.add("hidden");
+
+  question.placeholder = "Ask a general HR question using public information…";
+
+  const heading = document.querySelector("#welcomeState h2");
+  const intro = document.querySelector("#welcomeState p");
+
+  if (heading) {
+    heading.textContent = "Try HR Mind AI as a guest";
+  }
+
+  if (intro) {
+    intro.textContent =
+      "Explore general HR topics using public web information. Company policies and private documents require sign-in.";
+  }
+
+  const welcomeCards = document.querySelectorAll("#welcomeState .welcome-card");
+
+  const generalQuestions = [
+    {
+      title: "Annual Leave Basics",
+      description: "Understand common leave policies and terminology.",
+      question: "What is annual leave and how is it commonly calculated?",
+    },
+    {
+      title: "Remote Work",
+      description: "Learn about common remote-work practices.",
+      question: "What are common best practices for remote working?",
+    },
+    {
+      title: "Expense Policies",
+      description: "Explore typical business expense procedures.",
+      question: "What should a business travel expense policy include?",
+    },
+    {
+      title: "Employee Rights",
+      description: "Explore general employment information.",
+      question:
+        "What should employees consider when reviewing an employment contract?",
+    },
+  ];
+
+  welcomeCards.forEach((card, index) => {
+    const suggestion = generalQuestions[index];
+
+    if (!suggestion) return;
+
+    card.dataset.question = suggestion.question;
+
+    const title = card.querySelector("strong");
+    const description = card.querySelector("span");
+
+    if (title) title.textContent = suggestion.title;
+    if (description) {
+      description.textContent = suggestion.description;
+    }
+  });
+}
+
+window.addEventListener("hrmind:guest", initializeGuestMode);

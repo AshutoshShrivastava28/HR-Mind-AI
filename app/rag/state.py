@@ -1,12 +1,13 @@
 from typing import List, Literal
-from typing_extensions import TypedDict
-from pydantic import BaseModel, Field
+
 from langchain_core.documents import Document
+from pydantic import BaseModel, Field
+from typing_extensions import NotRequired, TypedDict
 
 
 class RouteDecision(BaseModel):
     route: Literal["kb", "direct"] = Field(
-        description="kb for HR/policy questions; direct for greetings/simple chat"
+        description=("kb for HR/policy questions; " "direct for greetings/simple chat")
     )
 
 
@@ -17,6 +18,7 @@ class EvidenceGrade(BaseModel):
 
 
 class AgentState(TypedDict):
+    user_id: NotRequired[str]
     question: str
     current_query: str
     kb_docs: List[Document]
