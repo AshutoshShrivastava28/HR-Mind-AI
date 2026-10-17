@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <title>{{ app_name }} | Shared conversation</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f7fb;
+        --card: #fff;
+        --text: #192230;
+        --muted: #667085;
+        --border: #e4e7ec;
+        --accent: #3156d3;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #10141c;
+          --card: #191f2b;
+          --text: #edf1f7;
+          --muted: #a8b1c2;
+          --border: #303949;
+          --accent: #8ea6ff;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          16px/1.6 system-ui,
+          -apple-system,
+          Segoe UI,
+          sans-serif;
+      }
+
+      header {
+        border-bottom: 1px solid var(--border);
+        background: var(--card);
+      }
+
+      .wrap {
+        max-width: 900px;
+        width: calc(100% - 32px);
+        margin: auto;
+      }
+
+      .top {
+        min-height: 68px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .brand {
+        font-weight: 750;
+        letter-spacing: -0.02em;
+      }
+
+      .pill {
+        color: var(--muted);
+        font-size: 0.85rem;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px 10px;
+      }
+
+      main {
+        padding: 32px 0 56px;
+      }
+
+      h1 {
+        font-size: clamp(1.5rem, 4vw, 2.1rem);
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+        margin: 0 0 8px;
+      }
+
+      .meta,
+      .subtle {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      #messages {
+        display: grid;
+        gap: 18px;
+        margin-top: 28px;
+      }
+
+      .message {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 18px 20px;
+        min-width: 0;
+      }
+
+      .message h2 {
+        margin: 0 0 10px;
+        font-size: 0.95rem;
+      }
+
+      .content {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .sources {
+        border-top: 1px solid var(--border);
+        margin-top: 18px;
+        padding-top: 12px;
+      }
+
+      .sources h3 {
+        font-size: 0.85rem;
+        margin: 0 0 8px;
+        color: var(--muted);
+      }
+
+      .source {
+        margin: 10px 0;
+        padding-left: 12px;
+        border-left: 2px solid var(--border);
+      }
+
+      .source a {
+        color: var(--accent);
+        overflow-wrap: anywhere;
+      }
+
+      .excerpt {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-top: 4px;
+      }
+
+      .notice {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+      }
+
+      footer {
+        color: var(--muted);
+        font-size: 0.85rem;
+        border-top: 1px solid var(--border);
+        padding: 20px 0;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+
+  <body data-share-token="{{ share_token }}">
+    <header>
+      <div class="wrap top">
+        <div class="brand">{{ app_name }}</div>
+        <span class="pill">Read-only shared chat</span>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <div id="loading" class="notice" role="status">
+        Loading shared conversation…
+      </div>
+
+      <div id="unavailable" class="notice" role="alert" hidden>
+        This share link is unavailable, revoked, or expired.
+      </div>
+
+      <section id="conversation" hidden>
+        <h1 id="title">Shared conversation</h1>
+        <div id="expiry" class="meta"></div>
+        <div id="messages"></div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        This is a read-only snapshot. It does not provide access to the owner's
+        account or other conversations.
+      </div>
+    </footer>
+
+    <script>
+      (() => {
+        const token = document.body.dataset.shareToken;
+        const loading = document.getElementById("loading");
+        const unavailable = document.getElementById("unavailable");
+        const conversationEl = document.getElementById("conversation");
+        const messagesEl = document.getElementById("messages");
+
+        const safeUrl = (value) => {
+          try {
+            const parsed = new URL(value);
+            return ["https:", "http:"].includes(parsed.protocol)
+              ? parsed.href
+              : "";
+          } catch {
+            return "";
+          }
+        };
+
+        const formatDate = (value) => {
+          if (!value) return "";
+
+          const date = new Date(value);
+
+          return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+        };
+
+        const makeSource = (citation) => {
+          const wrap = document.createElement("div");
+          wrap.className = "source";
+
+          const title = String(citation.title || "Source");
+          const url = safeUrl(citation.url || "");
+          const label = document.createElement(url ? "a" : "span");
+
+          label.textContent =
+            (citation.id ? "[" + citation.id + "] " : "") + title;
+
+          if (url) {
+            label.href = url;
+            label.target = "_blank";
+            label.rel = "noopener noreferrer nofollow";
+          }
+
+          wrap.appendChild(label);
+
+          if (
+            citation.page !== undefined &&
+            citation.page !== null &&
+            String(citation.page) !== ""
+          ) {
+            const page = document.createElement("span");
+            page.className = "subtle";
+            page.textContent = " · Page " + citation.page;
+            wrap.appendChild(page);
+          }
+
+          if (citation.excerpt) {
+            const excerpt = document.createElement("div");
+            excerpt.className = "excerpt";
+            excerpt.textContent = citation.excerpt;
+            wrap.appendChild(excerpt);
+          }
+
+          return wrap;
+        };
+
+        const renderMessage = (message) => {
+          const card = document.createElement("article");
+          card.className = "message";
+
+          const heading = document.createElement("h2");
+          heading.textContent = message.role === "user" ? "You" : "HR Mind AI";
+
+          const content = document.createElement("div");
+          content.className = "content";
+          content.textContent = String(message.content || "");
+
+          card.append(heading, content);
+
+          const citations = Array.isArray(message.citations)
+            ? message.citations
+            : [];
+
+          if (citations.length) {
+            const sources = document.createElement("section");
+            sources.className = "sources";
+
+            const sourceHeading = document.createElement("h3");
+            sourceHeading.textContent = "Sources";
+            sources.appendChild(sourceHeading);
+
+            citations.forEach((citation) => {
+              if (citation && typeof citation === "object") {
+                sources.appendChild(makeSource(citation));
+              }
+            });
+
+            card.appendChild(sources);
+          }
+
+          return card;
+        };
+
+        fetch("/api/shared/" + encodeURIComponent(token), {
+          credentials: "omit",
+          cache: "no-store",
+        })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error("unavailable");
+            }
+
+            return response.json();
+          })
+          .then((data) => {
+            document.getElementById("title").textContent =
+              data.conversation?.title || "Shared conversation";
+
+            const expiry = formatDate(data.expires_at);
+
+            document.getElementById("expiry").textContent = expiry
+              ? "Link expires " + expiry
+              : "Shared read-only snapshot";
+
+            const messages = Array.isArray(data.messages) ? data.messages : [];
+
+            messages.forEach((message) => {
+              messagesEl.appendChild(renderMessage(message));
+            });
+
+            if (!messagesEl.childElementCount) {
+              const empty = document.createElement("div");
+              empty.className = "notice";
+              empty.textContent = "This conversation has no messages.";
+              messagesEl.appendChild(empty);
+            }
+
+            loading.hidden = true;
+            conversationEl.hidden = false;
+          })
+          .catch(() => {
+            loading.hidden = true;
+            unavailable.hidden = false;
+          });
+      })();
+    </script>
+  </body>
+</html>

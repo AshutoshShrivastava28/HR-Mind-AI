@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
@@ -29,11 +29,15 @@ from app.services.authentication import (
 )
 from app.services.conversations import (
     create_conversation,
+    create_share_link,
     delete_conversation,
     get_conversation,
     get_messages,
+    get_shared_conversation,
     list_conversations,
+    list_share_links,
     rename_conversation,
+    revoke_share_link,
     save_message,
 )
 from app.services.ingestion import SUPPORTED, chunk_documents, load_file
@@ -58,6 +62,82 @@ class GuestChatRequest(BaseModel):
 
 class RenameConversationRequest(BaseModel):
     title: str = Field(min_length=1, max_length=80)
+
+
+def _markdown_filename(title: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", title).strip("-_")[:60]
+    return f"{stem or 'hr-mind-ai-conversation'}.md"
+
+
+def _citation_markdown(citation: dict) -> str:
+    title = str(citation.get("title") or "Source")
+    title = title.replace("[", "\\[").replace("]", "\\]")
+
+    url = str(citation.get("url") or "").strip()
+    page = citation.get("page")
+
+    page_text = f", page {page}" if page not in (None, "") else ""
+
+    if url.startswith(("https://", "http://")):
+        safe_url = url.replace(")", "%29")
+        label = f"[{title}]({safe_url})"
+    else:
+        label = title
+
+    line = f"- {label}{page_text}"
+
+    excerpt = str(citation.get("excerpt") or "").strip()
+
+    if excerpt:
+        excerpt = excerpt.replace("\n", " ")
+        line += f"\n  > {excerpt}"
+
+    return line
+
+
+def _conversation_as_markdown(
+    conversation: dict,
+    messages: list[dict],
+) -> str:
+    from datetime import datetime, timezone
+
+    title = str(conversation.get("title") or "HR Mind AI conversation")
+    exported_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    lines = [
+        f"# {title}",
+        "",
+        f"Exported from HR Mind AI on {exported_at}",
+        "",
+    ]
+
+    for message in messages:
+        role = "You" if message.get("role") == "user" else "HR Mind AI"
+        content = str(message.get("content") or "").strip()
+
+        lines.extend(
+            [
+                f"## {role}",
+                "",
+                content,
+                "",
+            ]
+        )
+
+        citations = message.get("citations", [])
+
+        if isinstance(citations, list) and citations:
+            lines.extend(["### Sources", ""])
+
+            for citation in citations:
+                if isinstance(citation, dict):
+                    lines.append(_citation_markdown(citation))
+
+            lines.append("")
+
+        lines.extend(["---", ""])
+
+    return "\n".join(lines).strip() + "\n"
 
 
 def _safe_filename(filename: str | None) -> str:
@@ -218,6 +298,139 @@ def open_conversation(
             user["id"],
             conversation_id,
         ),
+    }
+
+
+@router.get("/conversations/{conversation_id}/export")
+def export_conversation(
+    conversation_id: str,
+    request: Request,
+):
+    """Download an owned conversation as a Markdown file."""
+    user = get_current_user(request)
+
+    conversation = get_conversation(user["id"], conversation_id)
+
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    messages = get_messages(user["id"], conversation_id)
+    markdown = _conversation_as_markdown(conversation, messages)
+    filename = _markdown_filename(str(conversation.get("title") or "conversation"))
+
+    return Response(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/share",
+    status_code=201,
+)
+def create_conversation_share(
+    conversation_id: str,
+    request: Request,
+):
+    """Create a seven-day, read-only snapshot share link."""
+    user = get_current_user(request)
+
+    share = create_share_link(user["id"], conversation_id)
+
+    if not share:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    return {
+        "share_id": share["share_id"],
+        "path": f"/share/{share['token']}",
+        "created_at": share["created_at"],
+        "expires_at": share["expires_at"],
+        "expires_in_days": 7,
+        "snapshot": True,
+    }
+
+
+@router.get("/conversations/{conversation_id}/shares")
+def conversation_share_links(
+    conversation_id: str,
+    request: Request,
+):
+    user = get_current_user(request)
+
+    shares = list_share_links(
+        user["id"],
+        conversation_id,
+    )
+
+    if shares is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    return {"shares": shares}
+
+
+@router.delete("/conversations/{conversation_id}/shares/{share_id}")
+def delete_conversation_share(
+    conversation_id: str,
+    share_id: str,
+    request: Request,
+):
+    user = get_current_user(request)
+
+    revoked = revoke_share_link(
+        user["id"],
+        conversation_id,
+        share_id,
+    )
+
+    if not revoked:
+        raise HTTPException(
+            status_code=404,
+            detail="Share link not found or already revoked.",
+        )
+
+    return {
+        "revoked": True,
+        "share_id": share_id,
+    }
+
+
+@router.get("/shared/{token}")
+def read_shared_conversation(
+    token: str,
+    response: Response,
+):
+    """Read a shared snapshot without account or agent-trace information."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+    shared = get_shared_conversation(token)
+
+    if not shared:
+        raise HTTPException(
+            status_code=404,
+            detail="This shared conversation is unavailable or has expired.",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    return {
+        "conversation": shared.get("conversation", {}),
+        "messages": shared.get("messages", []),
+        "share_created_at": shared.get("share_created_at"),
+        "expires_at": shared.get("expires_at"),
     }
 
 

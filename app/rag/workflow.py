@@ -12,6 +12,61 @@ from app.rag.vectorstore import get_retriever
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+
+def _source_title(metadata: dict) -> str:
+    raw = str(metadata.get("source") or metadata.get("filename") or "Knowledge base")
+
+    return raw.replace("\\", "/").split("/")[-1] or "Knowledge base"
+
+
+def _source_page(metadata: dict):
+    """Return a page identifier when it is present in document metadata."""
+    explicit = metadata.get("page_number")
+
+    if explicit not in (None, ""):
+        return explicit
+
+    page_label = metadata.get("page_label")
+
+    if page_label not in (None, ""):
+        return str(page_label)
+
+    page = metadata.get("page")
+
+    if isinstance(page, int) and not isinstance(page, bool):
+        return page + 1
+
+    return None
+
+
+def _excerpt(text: str, limit: int = 320) -> str:
+    normalized = " ".join(str(text or "").split())
+
+    if len(normalized) <= limit:
+        return normalized
+
+    return normalized[: limit - 1].rstrip() + "…"
+
+
+def _kb_citation(doc, index: int) -> dict:
+    metadata = getattr(doc, "metadata", {}) or {}
+
+    citation = {
+        "id": index,
+        "title": _source_title(metadata),
+        "url": "",
+        "type": "private_kb",
+        "excerpt": _excerpt(getattr(doc, "page_content", "")),
+    }
+
+    page = _source_page(metadata)
+
+    if page is not None:
+        citation["page"] = page
+
+    return citation
+
+
 _llm = None
 _web_search = None
 
@@ -165,22 +220,40 @@ def search_web(state: AgentState):
     citations = []
 
     if isinstance(result, dict):
-        if result.get("answer"):
-            lines.append("Search answer: " + result["answer"])
+        summary = str(result.get("answer") or "").strip()
+
+        if summary:
+            lines.append(
+                "Search summary (verify against the cited results):\n" + summary
+            )
 
         for item in result.get("results", []):
-            title = item.get("title", "")
-            url = item.get("url", "")
-            content = item.get("content", "")
+            if not isinstance(item, dict):
+                continue
 
-            lines.append(f"Title: {title}\n" f"URL: {url}\n" f"Content: {content}")
+            title = str(item.get("title") or "").strip()
+            url = str(item.get("url") or "").strip()
+            content = str(item.get("content") or "").strip()
+
+            if not url.startswith(("https://", "http://")):
+                continue
+
+            citation_id = len(citations) + 1
 
             citations.append(
                 {
+                    "id": citation_id,
                     "title": title or url,
                     "url": url,
                     "type": "web",
+                    "excerpt": _excerpt(content),
                 }
+            )
+
+            lines.append(
+                f"[{citation_id}] Title: {title or url}\n"
+                f"URL: {url}\n"
+                f"Content: {content}"
             )
 
     else:
@@ -265,11 +338,64 @@ Question: {state['question']}
     }
 
 
+def generate_from_web(state: AgentState):
+    citations = state.get("citations", [])
+
+    valid_ids = {item.get("id") for item in citations if isinstance(item, dict)}
+
+    available_ids = sorted(value for value in valid_ids if isinstance(value, int))
+
+    answer = llm().invoke(f"""
+You are an enterprise HR policy and employee support copilot.
+The private company HR knowledge base was insufficient.
+
+Answer using only the external public evidence below.
+Clearly say this is external public information and may require HR
+validation before being treated as company policy or employment guidance.
+
+CITATION RULES:
+- Cite factual claims using the exact evidence labels [1], [2], etc.
+- Put citations immediately after relevant claims, especially legal
+  requirements, dates, amounts, eligibility, or recommendations.
+- Never invent citation labels.
+- The available source IDs are: {available_ids}
+- If sources conflict or evidence is limited, explain the uncertainty.
+- Do not cite a source for a claim it does not support.
+
+Question:
+{state['question']}
+
+Numbered web evidence:
+{state['web_results']}
+""").content
+
+    return {
+        "answer": answer,
+        "source_used": "web_search",
+        "trace": add_trace(
+            state,
+            "Answer generation → WEB SEARCH with inline citations",
+        ),
+    }
+
+
 def generate_from_kb(state: AgentState):
-    context = "\n\n".join(
-        f"[Source: {doc.metadata.get('source', 'unknown')}]\n" f"{doc.page_content}"
-        for doc in state["kb_docs"]
-    )
+    docs = list(state.get("kb_docs", []))[:8]
+
+    citations = [_kb_citation(doc, index) for index, doc in enumerate(docs, start=1)]
+
+    context_parts = []
+
+    for citation, doc in zip(citations, docs):
+        page = f", page {citation['page']}" if citation.get("page") is not None else ""
+
+        context_parts.append(
+            f"[{citation['id']}] Source: "
+            f"{citation['title']}{page}\n"
+            f"Excerpt: {getattr(doc, 'page_content', '')}"
+        )
+
+    context = "\n\n".join(context_parts)
 
     answer = llm().invoke(f"""
 You are an enterprise HR policy and employee support copilot.
@@ -279,29 +405,23 @@ If steps are present, present them clearly.
 Do not invent policy details.
 Mention that the answer is based on the company's private knowledge base.
 
+CITATION RULES:
+- The evidence is labeled [1], [2], and so on.
+- Use these exact labels as inline citations.
+- Add a citation immediately after each material policy claim,
+  requirement, deadline, amount, or recommendation supported by evidence.
+- Use multiple labels such as [1][2] when appropriate.
+- Never invent a source label.
+- If a detail is not supported, say it is not specified.
+- Do not include a separate bibliography in the answer.
+  The application displays the source cards separately.
+
 Question:
 {state['question']}
 
-Private KB:
+Private KB evidence:
 {context}
 """).content
-
-    citations = []
-    seen = set()
-
-    for doc in state["kb_docs"]:
-        source = doc.metadata.get("source", "Private KB")
-
-        if source not in seen:
-            seen.add(source)
-
-            citations.append(
-                {
-                    "title": source.replace("\\", "/").split("/")[-1],
-                    "url": "",
-                    "type": "private_kb",
-                }
-            )
 
     return {
         "answer": answer,
@@ -309,32 +429,7 @@ Private KB:
         "citations": citations,
         "trace": add_trace(
             state,
-            "Answer generation → PRIVATE KB",
-        ),
-    }
-
-
-def generate_from_web(state: AgentState):
-    answer = llm().invoke(f"""
-You are an enterprise HR policy and employee support copilot.
-The private company HR knowledge base was insufficient.
-Answer ONLY from the web evidence below.
-Clearly say this is external public information and may require HR validation
-before being treated as company policy or employment guidance.
-
-Question:
-{state['question']}
-
-Web evidence:
-{state['web_results']}
-""").content
-
-    return {
-        "answer": answer,
-        "source_used": "web_search",
-        "trace": add_trace(
-            state,
-            "Answer generation → WEB SEARCH",
+            "Answer generation → PRIVATE KB with inline citations",
         ),
     }
 
@@ -470,10 +565,13 @@ def _is_simple_greeting(question: str) -> bool:
 
 def answer_guest_question(question: str) -> dict:
     """
-    Answer anonymous guests using public web results only.
+        Answer anonymous guests using public web results only.
 
-    Never access Pinecone, internal HR documents, personal documents,
-    the conversation database, or the audit database.
+        Never access Pinecone, internal HR documents, personal documents,
+        the conversation database, or the audit database.
+        - Cite material factual claims inline using the numbered labels [1], [2], etc.
+      that appear beside the public search evidence.
+    - Never use a citation number that is not present in the supplied evidence.
     """
     normalized = " ".join(question.lower().split()).strip(" \t\r\n.,!?")
 
@@ -583,30 +681,42 @@ def answer_guest_question(question: str) -> dict:
     citations = []
 
     if isinstance(result, dict):
-        answer_snippet = result.get("answer")
+        answer_snippet = str(result.get("answer") or "").strip()
 
         if answer_snippet:
-            snippets.append(str(answer_snippet))
+            snippets.append(
+                "Search summary (verify against numbered sources):\n" + answer_snippet
+            )
 
         for item in result.get("results", []):
             if not isinstance(item, dict):
                 continue
 
-            title = str(item.get("title", "")).strip()
-            url = str(item.get("url", "")).strip()
-            content = str(item.get("content", "")).strip()
+            title = str(item.get("title") or "").strip()
+            url = str(item.get("url") or "").strip()
+            content = str(item.get("content") or "").strip()
 
-            if content:
-                snippets.append(f"Title: {title}\nContent: {content}\nURL: {url}")
+            if not url.startswith(("https://", "http://")):
+                continue
 
-            if url.startswith(("https://", "http://")):
-                citations.append(
-                    {
-                        "title": title or url,
-                        "url": url,
-                        "type": "web",
-                    }
-                )
+            citation_id = len(citations) + 1
+
+            citations.append(
+                {
+                    "id": citation_id,
+                    "title": title or url,
+                    "url": url,
+                    "type": "web",
+                    "excerpt": _excerpt(content),
+                }
+            )
+
+            snippets.append(
+                f"[{citation_id}] Title: {title or url}\n"
+                f"Content: {content}\n"
+                f"URL: {url}"
+            )
+
     else:
         text_result = str(result).strip()
 

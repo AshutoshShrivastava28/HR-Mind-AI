@@ -45,3 +45,26 @@ def home(request: Request):
             "app_name": settings.app_name,
         },
     )
+
+
+@app.get("/share/{token}", response_class=HTMLResponse)
+def shared_conversation_page(request: Request, token: str):
+    """Render the standalone read-only page for a shared conversation."""
+    if not token or len(token) > 128:
+        return HTMLResponse(
+            "Shared conversation unavailable.",
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "shared.html",
+        {
+            "request": request,
+            "app_name": settings.app_name,
+            "share_token": token,
+        },
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

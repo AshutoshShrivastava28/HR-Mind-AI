@@ -1,9 +1,11 @@
+import hashlib
 import json
 import re
+import secrets
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.config import get_settings
@@ -73,6 +75,26 @@ def init_conversation_db() -> None:
         con.execute("""
             CREATE INDEX IF NOT EXISTS idx_messages_conversation
             ON conversation_messages(conversation_id, id)
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_shares (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                FOREIGN KEY (conversation_id)
+                    REFERENCES conversations(id)
+                    ON DELETE CASCADE
+            )
+        """)
+
+        con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversation_shares_owner
+            ON conversation_shares(owner_id, conversation_id, created_at)
         """)
 
 
@@ -329,6 +351,214 @@ def delete_conversation(
             WHERE id = ? AND owner_id = ?
             """,
             (conversation_id, owner_id),
+        )
+
+    return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------
+# Read-only conversation sharing
+# ---------------------------------------------------------
+
+SHARE_EXPIRY_DAYS = 7
+
+
+def _share_safe_citations(value) -> list[dict]:
+    """Only expose selected citation fields in shared snapshots."""
+    if not isinstance(value, list):
+        return []
+
+    allowed = ("id", "title", "url", "type", "page", "excerpt")
+    result = []
+
+    for item in value[:20]:
+        if not isinstance(item, dict):
+            continue
+
+        citation = {}
+
+        for key in allowed:
+            field = item.get(key)
+
+            if isinstance(field, (str, int, float)) and not isinstance(field, bool):
+                citation[key] = field
+
+        result.append(citation)
+
+    return result
+
+
+def create_share_link(owner_id: str, conversation_id: str) -> dict | None:
+    """Create a seven-day read-only snapshot share link."""
+    conversation = get_conversation(owner_id, conversation_id)
+
+    if conversation is None:
+        return None
+
+    messages = get_messages(owner_id, conversation_id)
+
+    snapshot = {
+        "conversation": {
+            "title": conversation.get("title") or "Shared conversation",
+            "created_at": conversation.get("created_at"),
+            "updated_at": conversation.get("updated_at"),
+        },
+        "messages": [],
+    }
+
+    for message in messages:
+        snapshot["messages"].append(
+            {
+                "role": message.get("role", "assistant"),
+                "content": str(message.get("content", "")),
+                "source_used": str(message.get("source_used", "")),
+                "citations": _share_safe_citations(message.get("citations", [])),
+                "created_at": message.get("created_at"),
+            }
+        )
+
+    share_id = uuid.uuid4().hex
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    created_at = datetime.now(timezone.utc)
+    expires_at = created_at + timedelta(days=SHARE_EXPIRY_DAYS)
+
+    created_text = created_at.isoformat()
+    expires_text = expires_at.isoformat()
+
+    with _connection() as con:
+        # Verify ownership again when creating the share.
+        owned = con.execute(
+            """
+            SELECT 1
+            FROM conversations
+            WHERE id = ? AND owner_id = ?
+            """,
+            (conversation_id, owner_id),
+        ).fetchone()
+
+        if owned is None:
+            return None
+
+        con.execute(
+            """
+            INSERT INTO conversation_shares (
+                id,
+                conversation_id,
+                owner_id,
+                token_hash,
+                snapshot_json,
+                created_at,
+                expires_at,
+                revoked_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                share_id,
+                conversation_id,
+                owner_id,
+                token_hash,
+                json.dumps(snapshot, ensure_ascii=False),
+                created_text,
+                expires_text,
+            ),
+        )
+
+    # The raw token is returned only once; only its hash is stored.
+    return {
+        "share_id": share_id,
+        "token": token,
+        "created_at": created_text,
+        "expires_at": expires_text,
+    }
+
+
+def get_shared_conversation(token: str) -> dict | None:
+    """Read an active shared snapshot without exposing owner data or traces."""
+    if not isinstance(token, str) or not (20 <= len(token) <= 128):
+        return None
+
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    with _connection() as con:
+        row = con.execute(
+            """
+            SELECT snapshot_json, created_at, expires_at
+            FROM conversation_shares
+            WHERE token_hash = ?
+              AND revoked_at IS NULL
+              AND expires_at > ?
+            """,
+            (token_hash, _now()),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    try:
+        snapshot = json.loads(row["snapshot_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(snapshot, dict):
+        return None
+
+    snapshot["share_created_at"] = row["created_at"]
+    snapshot["expires_at"] = row["expires_at"]
+
+    return snapshot
+
+
+def list_share_links(
+    owner_id: str,
+    conversation_id: str,
+) -> list[dict] | None:
+    """List share-link status for a conversation owned by this user."""
+    with _connection() as con:
+        owned = con.execute(
+            """
+            SELECT 1
+            FROM conversations
+            WHERE id = ? AND owner_id = ?
+            """,
+            (conversation_id, owner_id),
+        ).fetchone()
+
+        if owned is None:
+            return None
+
+        rows = con.execute(
+            """
+            SELECT id, created_at, expires_at, revoked_at
+            FROM conversation_shares
+            WHERE conversation_id = ? AND owner_id = ?
+            ORDER BY created_at DESC
+            """,
+            (conversation_id, owner_id),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def revoke_share_link(
+    owner_id: str,
+    conversation_id: str,
+    share_id: str,
+) -> bool:
+    """Revoke a share link belonging to the signed-in owner."""
+    with _connection() as con:
+        cursor = con.execute(
+            """
+            UPDATE conversation_shares
+            SET revoked_at = ?
+            WHERE id = ?
+              AND conversation_id = ?
+              AND owner_id = ?
+              AND revoked_at IS NULL
+            """,
+            (_now(), share_id, conversation_id, owner_id),
         )
 
     return cursor.rowcount > 0
