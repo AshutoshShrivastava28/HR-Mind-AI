@@ -14,3 +14,5 @@ data/*.db-*
 # Private uploaded files
 uploads/users/
 uploads/company/
+gmail_oauth.json
+**/gmail_oauth.json

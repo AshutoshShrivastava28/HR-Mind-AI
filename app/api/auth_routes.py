@@ -115,7 +115,7 @@ def _deliver_or_dev_link(
         except Exception as exc:
             raise HTTPException(
                 status_code=503,
-                detail="Email could not be sent. Check SMTP settings and try again.",
+                detail="Email could not be sent. Check email-delivery configuration and application logs.",
             ) from exc
 
         return None
@@ -127,7 +127,7 @@ def _deliver_or_dev_link(
         status_code=503,
         detail=(
             "Email delivery is not configured. "
-            "Configure SMTP before enabling account verification."
+            "Configure Gmail API or SMTP before enabling account verification."
         ),
     )
 

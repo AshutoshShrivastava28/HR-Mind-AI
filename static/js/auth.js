@@ -65,7 +65,7 @@
 
     const headings = {
       login: [
-        "Welcome back",
+        "Welcome to HR Mind AI",
         "Sign in to access your HR assistant and saved conversations.",
       ],
       register: [
@@ -378,6 +378,7 @@
 
       history.replaceState({}, "", window.location.pathname);
 
+      setBusy(false);
       setMode("login", false);
 
       showMessage(

@@ -12,3 +12,5 @@ env
 .pytest_cache
 tests
 *.log
+gmail_oauth.json
+**/gmail_oauth.json
