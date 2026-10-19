@@ -440,7 +440,17 @@ def create_share_link(owner_id: str, conversation_id: str) -> dict | None:
 
         if owned is None:
             return None
-
+        # Revoke previous links for this conversation before creating a new one.
+        con.execute(
+            """
+    UPDATE conversation_shares
+    SET revoked_at = ?
+    WHERE conversation_id = ?
+      AND owner_id = ?
+      AND revoked_at IS NULL
+    """,
+            (created_text, conversation_id, owner_id),
+        )
         con.execute(
             """
             INSERT INTO conversation_shares (

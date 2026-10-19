@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from app.core.config import get_settings
 from app.rag.vectorstore import add_documents, delete_vectors
@@ -46,6 +47,8 @@ router = APIRouter(prefix="/api")
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+_active_chat_cancellations: dict[str, tuple[threading.Event, str]] = {}
+_chat_cancellation_lock = threading.Lock()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 64 * 1024
@@ -54,10 +57,12 @@ UPLOAD_CHUNK_BYTES = 64 * 1024
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=3000)
     conversation_id: str | None = None
+    request_id: str | None = Field(default=None, min_length=16, max_length=80)
 
 
 class GuestChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=1500)
+    request_id: str | None = Field(default=None, min_length=16, max_length=80)
 
 
 class RenameConversationRequest(BaseModel):
@@ -492,6 +497,83 @@ def remove_conversation(
     }
 
 
+def _register_chat_cancellation(
+    request_id: str | None,
+    owner_key: str,
+):
+    request_id = request_id or uuid.uuid4().hex
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", request_id):
+        raise HTTPException(status_code=400, detail="Invalid request ID.")
+
+    event = threading.Event()
+
+    with _chat_cancellation_lock:
+        if request_id in _active_chat_cancellations:
+            raise HTTPException(
+                status_code=409,
+                detail="Request ID is already active.",
+            )
+
+        _active_chat_cancellations[request_id] = (event, owner_key)
+
+    return request_id, event
+
+
+def _signal_chat_cancellation(
+    request_id: str,
+    owner_key: str,
+) -> bool:
+    with _chat_cancellation_lock:
+        active = _active_chat_cancellations.get(request_id)
+
+        if active is None or active[1] != owner_key:
+            return False
+
+        active[0].set()
+        return True
+
+
+def _cleanup_chat_cancellation(
+    request_id: str,
+    event: threading.Event,
+) -> None:
+    event.set()
+
+    with _chat_cancellation_lock:
+        active = _active_chat_cancellations.get(request_id)
+
+        if active is not None and active[0] is event:
+            _active_chat_cancellations.pop(request_id, None)
+
+
+def _guest_cancel_owner(request: Request) -> str:
+    client_ip = request.client.host if request.client else "unknown"
+    return f"guest:{client_ip}"
+
+
+@router.post("/chat/{request_id}/cancel")
+def cancel_chat_generation(request_id: str, request: Request):
+    user = get_current_user(request)
+
+    cancelled = _signal_chat_cancellation(
+        request_id,
+        f"user:{user['id']}",
+    )
+
+    return {"cancelled": cancelled}
+
+
+@router.post("/guest/chat/{request_id}/cancel")
+def cancel_guest_chat_generation(request_id: str, request: Request):
+    cancelled = _signal_chat_cancellation(
+        request_id,
+        _guest_cancel_owner(request),
+    )
+
+    return {"cancelled": cancelled}
+
+
 # ---------------------------------------------------------
 # Chat: only access conversations owned by the signed-in user
 # ---------------------------------------------------------
@@ -514,7 +596,16 @@ def chat(
             detail="Choose a valid conversation before chatting.",
         )
 
+    request_id, cancel_event = _register_chat_cancellation(
+        payload.request_id,
+        f"user:{user['id']}",
+    )
+
     def generate():
+        user_message_saved = False
+        assistant_message_saved = False
+        final_state = {}
+
         try:
             save_message(
                 user["id"],
@@ -522,6 +613,11 @@ def chat(
                 "user",
                 payload.question,
             )
+            user_message_saved = True
+
+            if cancel_event.is_set():
+                yield json.dumps({"type": "cancelled"}) + "\n"
+                return
 
             initial = {
                 "question": payload.question,
@@ -538,13 +634,17 @@ def chat(
                 "citations": [],
             }
 
-            final_state = {}
-
             for update in agent_graph.stream(
                 initial,
                 stream_mode="updates",
             ):
+                if cancel_event.is_set():
+                    break
+
                 for node_name, node_update in update.items():
+                    if cancel_event.is_set():
+                        break
+
                     final_state.update(node_update)
 
                     yield json.dumps(
@@ -553,6 +653,24 @@ def chat(
                             "node": node_name,
                         }
                     ) + "\n"
+
+                if cancel_event.is_set():
+                    break
+
+            if cancel_event.is_set():
+                save_message(
+                    user["id"],
+                    conversation_id,
+                    "assistant",
+                    "Response generation was stopped by the user.",
+                    "cancelled",
+                    [],
+                    final_state.get("trace", []),
+                )
+                assistant_message_saved = True
+
+                yield json.dumps({"type": "cancelled"}) + "\n"
+                return
 
             answer = final_state.get("answer", "")
             source_used = final_state.get("source_used", "")
@@ -568,6 +686,21 @@ def chat(
             except Exception:
                 logger.exception("Failed to write chat audit record")
 
+            if cancel_event.is_set():
+                save_message(
+                    user["id"],
+                    conversation_id,
+                    "assistant",
+                    "Response generation was stopped by the user.",
+                    "cancelled",
+                    [],
+                    trace_items,
+                )
+                assistant_message_saved = True
+
+                yield json.dumps({"type": "cancelled"}) + "\n"
+                return
+
             save_message(
                 user["id"],
                 conversation_id,
@@ -577,6 +710,7 @@ def chat(
                 citations,
                 trace_items,
             )
+            assistant_message_saved = True
 
             yield json.dumps(
                 {
@@ -592,18 +726,45 @@ def chat(
                 }
             ) + "\n"
 
-        except Exception:
-            logger.exception("Agent chat request failed")
+        except GeneratorExit:
+            cancel_event.set()
+            raise
 
-            yield json.dumps(
-                {
-                    "type": "error",
-                    "detail": (
-                        "The agent could not complete this request. "
-                        "Please try again."
-                    ),
-                }
-            ) + "\n"
+        except Exception:
+            if not cancel_event.is_set():
+                logger.exception("Agent chat request failed")
+
+                yield json.dumps(
+                    {
+                        "type": "error",
+                        "detail": (
+                            "The agent could not complete this request. "
+                            "Please try again."
+                        ),
+                    }
+                ) + "\n"
+
+        finally:
+            if (
+                cancel_event.is_set()
+                and user_message_saved
+                and not assistant_message_saved
+            ):
+                try:
+                    save_message(
+                        user["id"],
+                        conversation_id,
+                        "assistant",
+                        "Response generation was stopped by the user.",
+                        "cancelled",
+                        [],
+                        final_state.get("trace", []),
+                    )
+                except Exception:
+                    logger.exception("Could not save cancelled-generation status")
+
+    def cleanup():
+        _cleanup_chat_cancellation(request_id, cancel_event)
 
     return StreamingResponse(
         generate(),
@@ -612,6 +773,7 @@ def chat(
             "Cache-Control": "no-cache",
             "X-Content-Type-Options": "nosniff",
         },
+        background=BackgroundTask(cleanup),
     )
 
 
@@ -970,6 +1132,11 @@ def guest_chat(
 ):
     _check_guest_rate_limit(request)
 
+    request_id, cancel_event = _register_chat_cancellation(
+        payload.request_id,
+        _guest_cancel_owner(request),
+    )
+
     def generate():
         try:
             yield json.dumps(
@@ -979,9 +1146,21 @@ def guest_chat(
                 }
             ) + "\n"
 
+            if cancel_event.is_set():
+                yield json.dumps({"type": "cancelled"}) + "\n"
+                return
+
             result = answer_guest_question(payload.question)
 
+            if cancel_event.is_set():
+                yield json.dumps({"type": "cancelled"}) + "\n"
+                return
+
             for step in result.get("trace", []):
+                if cancel_event.is_set():
+                    yield json.dumps({"type": "cancelled"}) + "\n"
+                    return
+
                 yield json.dumps(
                     {
                         "type": "trace",
@@ -999,18 +1178,26 @@ def guest_chat(
                 }
             ) + "\n"
 
-        except Exception:
-            logger.exception("Guest chat request failed")
+        except GeneratorExit:
+            cancel_event.set()
+            raise
 
-            yield json.dumps(
-                {
-                    "type": "error",
-                    "detail": (
-                        "Guest search is temporarily unavailable. "
-                        "Please try again later."
-                    ),
-                }
-            ) + "\n"
+        except Exception:
+            if not cancel_event.is_set():
+                logger.exception("Guest chat request failed")
+
+                yield json.dumps(
+                    {
+                        "type": "error",
+                        "detail": (
+                            "Guest search is temporarily unavailable. "
+                            "Please try again later."
+                        ),
+                    }
+                ) + "\n"
+
+    def cleanup():
+        _cleanup_chat_cancellation(request_id, cancel_event)
 
     return StreamingResponse(
         generate(),
@@ -1019,4 +1206,5 @@ def guest_chat(
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
         },
+        background=BackgroundTask(cleanup),
     )

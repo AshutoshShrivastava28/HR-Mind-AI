@@ -4,6 +4,7 @@ const question = document.getElementById("question");
 const trace = document.getElementById("trace");
 const sourceUsed = document.getElementById("sourceUsed");
 const submitButton = form.querySelector('button[type="submit"]');
+const stopGenerationBtn = document.getElementById("stopGenerationBtn");
 
 const historyModal = document.getElementById("historyModal");
 const historyList = document.getElementById("historyList");
@@ -56,8 +57,29 @@ const companyDocumentsList = document.getElementById("companyDocumentsList");
 const personalDocsPanel = document.getElementById("personalDocsPanel");
 const companyDocsPanel = document.getElementById("companyDocsPanel");
 
+const conversationToolbar = document.getElementById("conversationToolbar");
+const exportConversationBtn = document.getElementById("exportConversationBtn");
+const shareConversationBtn = document.getElementById("shareConversationBtn");
+
+const shareModal = document.getElementById("shareModal");
+const closeShareModal = document.getElementById("closeShareModal");
+const cancelShareModal = document.getElementById("cancelShareModal");
+const createShareLinkBtn = document.getElementById("createShareLinkBtn");
+const copyShareLinkBtn = document.getElementById("copyShareLinkBtn");
+const shareLinkInput = document.getElementById("shareLinkInput");
+const shareLinkPanel = document.getElementById("shareLinkPanel");
+const shareLinkExpiry = document.getElementById("shareLinkExpiry");
+const shareStatus = document.getElementById("shareStatus");
+const refreshShareLinksBtn = document.getElementById("refreshShareLinksBtn");
+const shareLinksList = document.getElementById("shareLinksList");
+
+let shareModalConversationId = null;
+let nextMessageRenderId = 0;
+
 let requestInProgress = false;
+let activeGeneration = null;
 let currentConversationId = null;
+let currentConversationHasMessages = false;
 let conversations = [];
 let pendingConversationAction = null;
 let actionSaving = false;
@@ -106,7 +128,6 @@ function formatSource(value = "") {
   const key = String(value || "")
     .trim()
     .toLowerCase();
-
   return key
     ? SOURCE_LABELS[key] || String(value).replace(/_/g, " ")
     : "Unknown";
@@ -114,18 +135,14 @@ function formatSource(value = "") {
 
 function formatTraceNode(value = "") {
   const key = String(value || "").trim();
-
   return TRACE_NODE_LABELS[key] || key.replace(/_/g, " ");
 }
 
 function safeExternalUrl(value) {
-  if (typeof value !== "string" || !value.trim()) {
-    return "";
-  }
+  if (typeof value !== "string" || !value.trim()) return "";
 
   try {
     const url = new URL(value, window.location.origin);
-
     return ["https:", "http:"].includes(url.protocol) ? url.href : "";
   } catch {
     return "";
@@ -134,7 +151,6 @@ function safeExternalUrl(value) {
 
 function cleanCitationTitle(citation = {}) {
   const title = String(citation.title || citation.url || "Source").trim();
-
   const localPath =
     citation.type === "private_kb" ||
     /^[a-z]:[\\/]/i.test(title) ||
@@ -181,35 +197,333 @@ async function apiRequest(url, options = {}) {
   return data;
 }
 
+// ---------------------------------------------------------
+// Conversation export and sharing
+// ---------------------------------------------------------
+
+function updateConversationToolbar() {
+  if (!conversationToolbar) return;
+
+  const isGuest = window.hrmindCurrentUser?.role === "guest";
+  const shouldShow =
+    Boolean(currentConversationId) &&
+    currentConversationHasMessages &&
+    !isGuest;
+
+  conversationToolbar.classList.toggle("hidden", !shouldShow);
+
+  [exportConversationBtn, shareConversationBtn].forEach((button) => {
+    if (button) button.disabled = requestInProgress || !shouldShow;
+  });
+}
+
+function setShareStatus(message = "", isError = false) {
+  if (!shareStatus) return;
+  shareStatus.textContent = message;
+  shareStatus.classList.toggle("error", isError);
+}
+
+function openShareModal() {
+  if (
+    !shareModal ||
+    !shareLinkInput ||
+    !shareLinkExpiry ||
+    !shareLinkPanel ||
+    !currentConversationId ||
+    window.hrmindCurrentUser?.role === "guest"
+  ) {
+    return;
+  }
+
+  shareModalConversationId = currentConversationId;
+  shareLinkInput.value = "";
+  shareLinkExpiry.textContent = "";
+  shareLinkPanel.classList.add("hidden");
+
+  setShareStatus("Create a link to share a read-only snapshot of this chat.");
+  if (shareLinksList) {
+    shareLinksList.innerHTML = "";
+  }
+  shareModal.classList.remove("hidden");
+}
+
+function closeShareDialog() {
+  shareModal?.classList.add("hidden");
+  shareModalConversationId = null;
+}
+
+async function exportCurrentConversation() {
+  if (!exportConversationBtn || !currentConversationId || requestInProgress)
+    return;
+
+  const conversationId = currentConversationId;
+  const originalText = exportConversationBtn.textContent;
+
+  exportConversationBtn.disabled = true;
+  exportConversationBtn.textContent = "Exporting…";
+
+  try {
+    const response = await fetch(
+      `/api/conversations/${encodeURIComponent(conversationId)}/export`,
+      {
+        credentials: "same-origin",
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) {
+      let detail = `Export failed (${response.status}).`;
+
+      try {
+        const payload = await response.json();
+        detail = payload.detail || detail;
+      } catch {
+        // Keep the generic error.
+      }
+
+      throw new Error(detail);
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename\s*=\s*"?([^";]+)"?/i);
+    const filename = match?.[1] || "hr-mind-ai-conversation.md";
+
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (error) {
+    window.alert(error.message || "Could not export this conversation.");
+  } finally {
+    exportConversationBtn.textContent = originalText;
+    updateConversationToolbar();
+  }
+}
+
+async function createConversationShare() {
+  const conversationId = shareModalConversationId;
+
+  if (
+    !createShareLinkBtn ||
+    !shareLinkInput ||
+    !shareLinkPanel ||
+    !conversationId
+  ) {
+    return;
+  }
+
+  createShareLinkBtn.disabled = true;
+  createShareLinkBtn.textContent = "Creating link…";
+  setShareStatus("Creating a read-only snapshot…");
+
+  try {
+    const data = await apiRequest(
+      `/api/conversations/${encodeURIComponent(conversationId)}/share`,
+      { method: "POST" },
+    );
+
+    const shareUrl = new URL(data.path, window.location.origin).href;
+    shareLinkInput.value = shareUrl;
+    shareLinkPanel.classList.remove("hidden");
+
+    shareLinkExpiry.textContent =
+      "This is a read-only snapshot of the chat when the link was created. It expires after 7 days or sooner if replaced by a newer link.";
+
+    setShareStatus("New share link created.");
+    await refreshShareLinks();
+  } catch (error) {
+    setShareStatus(error.message || "Could not create a share link.", true);
+  } finally {
+    createShareLinkBtn.disabled = false;
+    createShareLinkBtn.textContent = "Create share link";
+  }
+}
+
+async function copyShareLink() {
+  if (!shareLinkInput) return;
+
+  const value = shareLinkInput.value.trim();
+
+  if (!value) {
+    setShareStatus("Create a share link first.", true);
+    return;
+  }
+
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      shareLinkInput.focus();
+      shareLinkInput.select();
+
+      if (!document.execCommand("copy")) {
+        throw new Error("Select the link and copy it manually.");
+      }
+    }
+
+    setShareStatus("Link copied to clipboard.");
+  } catch (error) {
+    shareLinkInput.focus();
+    shareLinkInput.select();
+    setShareStatus(
+      error.message || "Select the link and copy it manually.",
+      true,
+    );
+  }
+}
+
+async function refreshShareLinks() {
+  const conversationId = shareModalConversationId;
+  if (!conversationId || !shareLinksList) return;
+
+  shareLinksList.innerHTML = '<div class="empty">Loading links…</div>';
+
+  try {
+    const data = await apiRequest(
+      `/api/conversations/${encodeURIComponent(conversationId)}/shares`,
+    );
+
+    const shares = Array.isArray(data.shares) ? data.shares : [];
+
+    if (!shares.length) {
+      shareLinksList.innerHTML =
+        '<div class="empty">No share links created for this conversation.</div>';
+      return;
+    }
+
+    shareLinksList.innerHTML = shares
+      .map((share) => {
+        const expiresMs = Date.parse(share.expires_at || "");
+        const isExpired = Number.isFinite(expiresMs) && expiresMs <= Date.now();
+        const isRevoked = Boolean(share.revoked_at);
+        const status = isRevoked ? "Revoked" : isExpired ? "Expired" : "Active";
+        const canRevoke = !isRevoked && !isExpired;
+        const id = escapeHtml(String(share.id || ""));
+
+        return `
+          <div class="share-link-item">
+            <div class="share-link-details">
+              <strong>${status}</strong>
+              <span>Created ${escapeHtml(formatDate(share.created_at) || "unknown")}</span>
+              <span>Expires ${escapeHtml(formatDate(share.expires_at) || "unknown")}</span>
+            </div>
+            ${
+              canRevoke
+                ? `<button class="history-action delete" type="button" data-share-revoke="${id}">Revoke</button>`
+                : ""
+            }
+          </div>
+        `;
+      })
+      .join("");
+  } catch (error) {
+    shareLinksList.innerHTML =
+      '<div class="empty">Could not load share links.</div>';
+    setShareStatus(error.message || "Could not load share links.", true);
+  }
+}
+
+shareLinksList?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-share-revoke]");
+  if (!button || !shareModalConversationId) return;
+
+  const shareId = button.dataset.shareRevoke;
+
+  if (
+    !shareId ||
+    !window.confirm("Revoke this share link? Anyone using it will lose access.")
+  ) {
+    return;
+  }
+
+  button.disabled = true;
+
+  try {
+    await apiRequest(
+      `/api/conversations/${encodeURIComponent(shareModalConversationId)}/shares/${encodeURIComponent(shareId)}`,
+      { method: "DELETE" },
+    );
+
+    setShareStatus("Share link revoked.");
+    await refreshShareLinks();
+  } catch (error) {
+    setShareStatus(error.message || "Could not revoke share link.", true);
+    button.disabled = false;
+  }
+});
+
+exportConversationBtn?.addEventListener("click", exportCurrentConversation);
+shareConversationBtn?.addEventListener("click", openShareModal);
+closeShareModal?.addEventListener("click", closeShareDialog);
+cancelShareModal?.addEventListener("click", closeShareDialog);
+createShareLinkBtn?.addEventListener("click", createConversationShare);
+copyShareLinkBtn?.addEventListener("click", copyShareLink);
+
+refreshShareLinksBtn?.addEventListener("click", () => {
+  refreshShareLinks().catch(() => {});
+});
+
+shareModal?.addEventListener("click", (event) => {
+  if (event.target === shareModal) closeShareDialog();
+});
+
+// ---------------------------------------------------------
+// Messages, citations and scrolling
+// ---------------------------------------------------------
+
 function scrollLatestIntoView(element = chat) {
   const styles = window.getComputedStyle(chat);
-
   const hasInternalScroll =
     styles.overflowY !== "visible" && chat.scrollHeight > chat.clientHeight + 2;
 
   if (hasInternalScroll) {
-    chat.scrollTo({
-      top: chat.scrollHeight,
-      behavior: "smooth",
-    });
-
+    chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
     return;
   }
 
   const target = element === chat ? chat.lastElementChild : element;
-
-  target?.scrollIntoView({
-    behavior: "smooth",
-    block: "end",
-  });
+  target?.scrollIntoView({ behavior: "smooth", block: "end" });
 }
 
 function addMessage(role, text, source = "", citations = []) {
   const wrap = document.createElement("div");
+  const messageKey = ++nextMessageRenderId;
 
   wrap.className = `message ${role === "user" ? "user" : "assistant"}`;
 
   const items = Array.isArray(citations) ? citations : [];
+  const citationMap = new Map();
+
+  items.forEach((citation, index) => {
+    const suppliedId = Number(citation?.id);
+    const citationNumber =
+      Number.isInteger(suppliedId) && suppliedId > 0 ? suppliedId : index + 1;
+
+    if (!citationMap.has(citationNumber)) {
+      citationMap.set(citationNumber, citation || {});
+    }
+  });
+
+  let displayText = String(text ?? "");
+
+  if (role !== "user" && citationMap.size) {
+    displayText = displayText.replace(
+      /\[(\d{1,3})\](?!\()/g,
+      (match, rawId) => {
+        const citationNumber = Number(rawId);
+        if (!citationMap.has(citationNumber)) return match;
+
+        return `[${citationNumber}](#citation-source-${messageKey}-${citationNumber} "Jump to source ${citationNumber}")`;
+      },
+    );
+  }
 
   const citationsHtml = items.length
     ? `
@@ -217,22 +531,45 @@ function addMessage(role, text, source = "", citations = []) {
         <strong>Sources</strong>
         <div class="source-list">
           ${items
-            .map((citation) => {
-              const title = escapeHtml(cleanCitationTitle(citation || {}));
+            .map((citation, index) => {
+              const item = citation || {};
+              const suppliedId = Number(item.id);
+              const citationNumber =
+                Number.isInteger(suppliedId) && suppliedId > 0
+                  ? suppliedId
+                  : index + 1;
+              const title = escapeHtml(cleanCitationTitle(item));
+              const url = safeExternalUrl(item.url);
 
-              const url = safeExternalUrl(citation?.url);
+              const page =
+                item.page !== undefined &&
+                item.page !== null &&
+                String(item.page) !== ""
+                  ? `<span class="source-page">Page ${escapeHtml(String(item.page))}</span>`
+                  : "";
+
+              const excerpt = item.excerpt
+                ? `<p class="source-excerpt">${escapeHtml(String(item.excerpt))}</p>`
+                : "";
+
+              const safeTitle = url
+                ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow">${title}</a>`
+                : `<span class="source-title">${title}</span>`;
 
               return `
-              <div class="source-card">
-                <span class="source-icon" aria-hidden="true">↗</span>
-                ${
-                  url
-                    ? `<a href="${escapeHtml(url)}"
-                           target="_blank"
-                           rel="noopener noreferrer">${title}</a>`
-                    : `<span>${title}</span>`
-                }
-              </div>
+              <article
+                class="source-card"
+                id="citation-source-${messageKey}-${citationNumber}"
+                data-citation-number="${citationNumber}"
+              >
+                <span class="citation-number">[${citationNumber}]</span>
+                <span class="source-icon" aria-hidden="true">${url ? "↗" : "▤"}</span>
+                <div class="source-card-body">
+                  ${safeTitle}
+                  ${page}
+                  ${excerpt}
+                </div>
+              </article>
             `;
             })
             .join("")}
@@ -243,17 +580,15 @@ function addMessage(role, text, source = "", citations = []) {
 
   const body =
     role === "user"
-      ? escapeHtml(text).replace(/\n/g, "<br>")
-      : formatText(text);
+      ? escapeHtml(displayText).replace(/\n/g, "<br>")
+      : formatText(displayText);
 
   const sourceHtml = source
     ? `<div class="answer-source">Source: ${escapeHtml(formatSource(source))}</div>`
     : "";
 
   wrap.innerHTML = `
-    <div class="avatar" aria-hidden="true">
-      ${role === "user" ? "You" : "AI"}
-    </div>
+    <div class="avatar" aria-hidden="true">${role === "user" ? "You" : "AI"}</div>
     <div class="bubble">
       ${body}
       ${sourceHtml}
@@ -262,9 +597,7 @@ function addMessage(role, text, source = "", citations = []) {
   `;
 
   chat.appendChild(wrap);
-
   scrollLatestIntoView(wrap);
-
   return wrap;
 }
 
@@ -275,12 +608,9 @@ function renderTrace(items = [], running = false) {
     ? safeItems
         .map((item, index) => {
           const active = running && index === safeItems.length - 1;
-
           return `
           <div class="trace-item ${active ? "active" : "completed"}">
-            <span class="trace-dot" aria-hidden="true">
-              ${active ? "•" : "✓"}
-            </span>
+            <span class="trace-dot" aria-hidden="true">${active ? "•" : "✓"}</span>
             <span>${escapeHtml(String(item))}</span>
           </div>
         `;
@@ -291,10 +621,22 @@ function renderTrace(items = [], running = false) {
 
 function setRequestBusy(isBusy) {
   requestInProgress = isBusy;
-
   question.disabled = isBusy;
   submitButton.disabled = isBusy;
-  submitButton.textContent = isBusy ? "Thinking…" : "Ask Agent";
+  submitButton.textContent = "Ask Agent";
+  submitButton.classList.toggle("hidden", isBusy);
+
+  if (stopGenerationBtn) {
+    const canStop = isBusy && Boolean(activeGeneration);
+
+    stopGenerationBtn.classList.toggle("hidden", !canStop);
+    stopGenerationBtn.disabled =
+      !canStop || activeGeneration?.cancelled === true;
+
+    stopGenerationBtn.textContent = activeGeneration?.cancelled
+      ? "Stopping…"
+      : "Stop";
+  }
 
   form.setAttribute("aria-busy", String(isBusy));
 
@@ -304,7 +646,61 @@ function setRequestBusy(isBusy) {
 
   newChatBtn.disabled = isBusy;
   historyNewChat.disabled = isBusy;
+
+  updateConversationToolbar();
 }
+
+function createGenerationContext(kind) {
+  const requestId =
+    window.crypto?.randomUUID?.() ||
+    `hrmind-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+
+  const endpoint = kind === "guest" ? "/api/guest/chat" : "/api/chat";
+
+  const generation = {
+    requestId,
+    controller: new AbortController(),
+    cancelUrl: `${endpoint}/${encodeURIComponent(requestId)}/cancel`,
+    cancelled: false,
+  };
+
+  activeGeneration = generation;
+  return generation;
+}
+
+function stopActiveGeneration() {
+  const generation = activeGeneration;
+
+  if (!generation || generation.cancelled) return;
+
+  generation.cancelled = true;
+
+  if (stopGenerationBtn) {
+    stopGenerationBtn.disabled = true;
+    stopGenerationBtn.textContent = "Stopping…";
+  }
+
+  // Ask the backend to cancel at a safe workflow boundary.
+  fetch(generation.cancelUrl, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+  }).catch(() => {});
+
+  // Stop waiting for and rendering the current response immediately.
+  generation.controller.abort();
+}
+
+function showGenerationStopped() {
+  hideTypingIndicator();
+
+  addMessage("assistant", "Generation stopped.");
+
+  renderTrace(["Generation stopped by user"], false);
+  sourceUsed.textContent = "Stopped";
+}
+
+stopGenerationBtn?.addEventListener("click", stopActiveGeneration);
 
 function setHistoryStatus(message = "", isError = false) {
   historyStatus.textContent = message;
@@ -312,17 +708,17 @@ function setHistoryStatus(message = "", isError = false) {
 }
 
 function resetChatUI() {
+  currentConversationHasMessages = false;
   chat.innerHTML = initialWelcomeMarkup;
-
   document.getElementById("chatExamples")?.classList.add("hidden");
 
   renderTrace([], false);
   sourceUsed.textContent = "—";
-
   question.value = "";
   question.disabled = false;
   submitButton.disabled = false;
 
+  updateConversationToolbar();
   setTimeout(() => question.focus(), 0);
 }
 
@@ -342,9 +738,7 @@ async function openHistoryModal() {
 
 function formatDate(value) {
   if (!value) return "";
-
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) return "";
 
   return date.toLocaleString([], {
@@ -360,15 +754,11 @@ function formatDate(value) {
 // ---------------------------------------------------------
 
 async function refreshHistory(showStatus = true) {
-  if (showStatus) {
-    setHistoryStatus("Loading conversations…");
-  }
+  if (showStatus) setHistoryStatus("Loading conversations…");
 
   try {
     const data = await apiRequest("/api/conversations");
-
     conversations = Array.isArray(data.conversations) ? data.conversations : [];
-
     renderHistory();
 
     setHistoryStatus(
@@ -379,13 +769,9 @@ async function refreshHistory(showStatus = true) {
 
     return conversations;
   } catch (error) {
-    if (showStatus) {
-      setHistoryStatus(error.message, true);
-    }
-
+    if (showStatus) setHistoryStatus(error.message, true);
     historyList.innerHTML =
       '<div class="empty">Could not load conversation history.</div>';
-
     throw error;
   }
 }
@@ -394,7 +780,6 @@ function renderHistory() {
   if (!conversations.length) {
     historyList.innerHTML =
       '<div class="empty">No saved conversations yet. Start a new chat to begin.</div>';
-
     return;
   }
 
@@ -406,38 +791,16 @@ function renderHistory() {
       const updated = formatDate(item.updated_at);
 
       return `
-      <div class="history-item ${
-        item.id === currentConversationId ? "current" : ""
-      }">
-        <button
-          type="button"
-          class="history-open"
-          data-history-action="open"
-          data-id="${id}"
-          title="Open ${title}"
-        >
+      <div class="history-item ${item.id === currentConversationId ? "current" : ""}">
+        <button type="button" class="history-open" data-history-action="open" data-id="${id}" title="Open ${title}">
           <span class="history-title">${title}</span>
           <span class="history-meta">
-            ${count} message${count === 1 ? "" : "s"}${
-              updated ? ` · ${escapeHtml(updated)}` : ""
-            }
+            ${count} message${count === 1 ? "" : "s"}${updated ? ` · ${escapeHtml(updated)}` : ""}
           </span>
         </button>
-
         <div class="history-actions">
-          <button
-            type="button"
-            class="history-action"
-            data-history-action="rename"
-            data-id="${id}"
-          >Rename</button>
-
-          <button
-            type="button"
-            class="history-action delete"
-            data-history-action="delete"
-            data-id="${id}"
-          >Delete</button>
+          <button type="button" class="history-action" data-history-action="rename" data-id="${id}">Rename</button>
+          <button type="button" class="history-action delete" data-history-action="delete" data-id="${id}">Delete</button>
         </div>
       </div>
     `;
@@ -449,19 +812,17 @@ async function createNewChat() {
   if (requestInProgress) return;
 
   try {
-    const data = await apiRequest("/api/conversations", {
-      method: "POST",
-    });
+    const data = await apiRequest("/api/conversations", { method: "POST" });
 
     if (!data.conversation?.id) {
       throw new Error("Server did not return a conversation ID.");
     }
 
     currentConversationId = data.conversation.id;
-
+    currentConversationHasMessages = false;
+    updateConversationToolbar();
     resetChatUI();
     closeHistoryModal();
-
     await refreshHistory(false);
   } catch (error) {
     addMessage(
@@ -482,6 +843,8 @@ async function openConversation(conversationId) {
     currentConversationId = data.conversation.id;
 
     const messages = Array.isArray(data.messages) ? data.messages : [];
+    currentConversationHasMessages = messages.length > 0;
+    updateConversationToolbar();
 
     chat.innerHTML = "";
 
@@ -505,7 +868,6 @@ async function openConversation(conversationId) {
 
       if (lastAssistant) {
         renderTrace(lastAssistant.trace || [], false);
-
         sourceUsed.textContent = formatSource(lastAssistant.source_used || "");
       } else {
         renderTrace([], false);
@@ -514,9 +876,7 @@ async function openConversation(conversationId) {
     }
 
     closeHistoryModal();
-
     await refreshHistory(false);
-
     scrollLatestIntoView();
   } catch (error) {
     setHistoryStatus(error.message, true);
@@ -525,36 +885,26 @@ async function openConversation(conversationId) {
 
 function openConversationAction(type, conversationId) {
   const item = conversations.find((row) => row.id === conversationId);
-
   if (!item || actionSaving) return;
 
   const isRename = type === "rename";
-
-  pendingConversationAction = {
-    type,
-    conversationId,
-  };
+  pendingConversationAction = { type, conversationId };
 
   conversationActionTitle.textContent = isRename
     ? "Rename conversation"
     : "Delete conversation?";
-
   conversationActionDescription.textContent = isRename
     ? "Choose a name that's easy to recognize later."
     : `Delete “${item.title || "New chat"}” and all its saved messages? This cannot be undone.`;
 
   conversationRenameFields.hidden = !isRename;
-
   conversationActionInput.value = isRename ? item.title || "" : "";
-
   conversationActionError.textContent = "";
 
   confirmConversationAction.textContent = isRename
     ? "Save changes"
     : "Delete conversation";
-
   confirmConversationAction.classList.toggle("danger", !isRename);
-
   conversationActionModal.classList.remove("hidden");
 
   setTimeout(() => {
@@ -569,7 +919,6 @@ function openConversationAction(type, conversationId) {
 
 function closeConversationActionDialog() {
   if (actionSaving) return;
-
   conversationActionModal.classList.add("hidden");
   pendingConversationAction = null;
   conversationActionError.textContent = "";
@@ -577,12 +926,10 @@ function closeConversationActionDialog() {
 
 historyList.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-history-action]");
-
   if (!button) return;
 
   const action = button.dataset.historyAction;
   const id = button.dataset.id;
-
   if (!id) return;
 
   if (action === "open") {
@@ -594,7 +941,6 @@ historyList.addEventListener("click", async (event) => {
 
 conversationActionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-
   if (!pendingConversationAction || actionSaving) return;
 
   const { type, conversationId } = pendingConversationAction;
@@ -603,7 +949,6 @@ conversationActionForm.addEventListener("submit", async (event) => {
 
   if (isRename && !title) {
     conversationActionError.textContent = "Please enter a conversation name.";
-
     conversationActionInput.focus();
     return;
   }
@@ -611,18 +956,14 @@ conversationActionForm.addEventListener("submit", async (event) => {
   if (isRename && title.length > 80) {
     conversationActionError.textContent =
       "The name must be 80 characters or fewer.";
-
     return;
   }
 
   actionSaving = true;
-
   confirmConversationAction.disabled = true;
   cancelConversationAction.disabled = true;
   closeConversationAction.disabled = true;
-
   confirmConversationAction.textContent = isRename ? "Saving…" : "Deleting…";
-
   conversationActionError.textContent = "";
 
   try {
@@ -631,25 +972,21 @@ conversationActionForm.addEventListener("submit", async (event) => {
     if (isRename) {
       await apiRequest(`/api/conversations/${encoded}`, {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
       });
     } else {
-      await apiRequest(`/api/conversations/${encoded}`, {
-        method: "DELETE",
-      });
+      await apiRequest(`/api/conversations/${encoded}`, { method: "DELETE" });
 
       if (currentConversationId === conversationId) {
         currentConversationId = null;
+        updateConversationToolbar();
         resetChatUI();
       }
     }
 
     conversationActionModal.classList.add("hidden");
     pendingConversationAction = null;
-
     await refreshHistory();
 
     setHistoryStatus(
@@ -662,11 +999,9 @@ conversationActionForm.addEventListener("submit", async (event) => {
       error.message || "Something went wrong. Please try again.";
   } finally {
     actionSaving = false;
-
     confirmConversationAction.disabled = false;
     cancelConversationAction.disabled = false;
     closeConversationAction.disabled = false;
-
     confirmConversationAction.textContent =
       pendingConversationAction?.type === "delete"
         ? "Delete conversation"
@@ -678,16 +1013,13 @@ closeConversationAction.addEventListener(
   "click",
   closeConversationActionDialog,
 );
-
 cancelConversationAction.addEventListener(
   "click",
   closeConversationActionDialog,
 );
 
 conversationActionModal.addEventListener("click", (event) => {
-  if (event.target === conversationActionModal) {
-    closeConversationActionDialog();
-  }
+  if (event.target === conversationActionModal) closeConversationActionDialog();
 });
 
 historyToggle.addEventListener("click", openHistoryModal);
@@ -700,15 +1032,14 @@ refreshHistoryBtn.addEventListener("click", () => {
 });
 
 historyModal.addEventListener("click", (event) => {
-  if (event.target === historyModal) {
-    closeHistoryModal();
-  }
+  if (event.target === historyModal) closeHistoryModal();
 });
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeConversationActionDialog();
     closeHistoryModal();
+    closeShareDialog();
     uploadModal.classList.add("hidden");
   }
 });
@@ -718,6 +1049,7 @@ document.addEventListener("keydown", (event) => {
 // ---------------------------------------------------------
 
 async function askGuestAgent(userQuestion) {
+  const generation = createGenerationContext("guest");
   setRequestBusy(true);
 
   try {
@@ -728,18 +1060,17 @@ async function askGuestAgent(userQuestion) {
     question.value = "";
 
     showTypingIndicator();
-
     renderTrace(["Starting temporary guest session…"], true);
     sourceUsed.textContent = "Public Web Search";
 
     const response = await fetch("/api/guest/chat", {
       method: "POST",
       credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
+      signal: generation.controller.signal,
       body: JSON.stringify({
         question: userQuestion,
+        request_id: generation.requestId,
       }),
     });
 
@@ -775,6 +1106,8 @@ async function askGuestAgent(userQuestion) {
         renderTrace(streamedTrace, true);
       } else if (event.type === "final") {
         finalData = event;
+      } else if (event.type === "cancelled") {
+        generation.cancelled = true;
       } else if (event.type === "error") {
         throw new Error(event.detail || "Guest search could not complete.");
       }
@@ -802,7 +1135,16 @@ async function askGuestAgent(userQuestion) {
         handleGuestLine(buffer);
       }
     } finally {
-      reader.releaseLock();
+      try {
+        reader.releaseLock();
+      } catch {
+        // Reader already released.
+      }
+    }
+
+    if (generation.cancelled) {
+      showGenerationStopped();
+      return;
     }
 
     if (!finalData) {
@@ -826,47 +1168,73 @@ async function askGuestAgent(userQuestion) {
   } catch (error) {
     hideTypingIndicator();
 
-    addMessage(
-      "assistant",
-      `**Guest chat error:** ${error.message || "Please try again."}`,
-    );
+    if (generation.cancelled || error?.name === "AbortError") {
+      showGenerationStopped();
+    } else {
+      addMessage(
+        "assistant",
+        `**Guest chat error:** ${error.message || "Please try again."}`,
+      );
 
-    renderTrace(["Guest request failed"], false);
-    sourceUsed.textContent = "Error";
+      renderTrace(["Guest request failed"], false);
+      sourceUsed.textContent = "Error";
+    }
   } finally {
     hideTypingIndicator();
+
+    if (activeGeneration === generation) {
+      activeGeneration = null;
+    }
+
     setRequestBusy(false);
   }
 }
+
 async function askAgent(rawQuestion) {
   const userQuestion = String(rawQuestion || "").trim();
 
   if (!userQuestion || requestInProgress) return;
+
   if (window.hrmindCurrentUser?.role === "guest") {
     await askGuestAgent(userQuestion);
     return;
   }
 
+  const generation = createGenerationContext("chat");
   setRequestBusy(true);
 
   try {
     if (!currentConversationId) {
       const created = await apiRequest("/api/conversations", {
         method: "POST",
+        signal: generation.controller.signal,
       });
 
-      currentConversationId = created.conversation.id;
+      if (generation.cancelled) {
+        throw new DOMException("Stopped", "AbortError");
+      }
 
+      currentConversationId = created.conversation.id;
+      currentConversationHasMessages = false;
+
+      updateConversationToolbar();
       resetChatUI();
 
       await refreshHistory(false);
     }
 
-    document.getElementById("welcomeState")?.remove();
+    if (generation.cancelled) {
+      throw new DOMException("Stopped", "AbortError");
+    }
 
+    document.getElementById("welcomeState")?.remove();
     document.getElementById("chatExamples")?.classList.remove("hidden");
 
     addMessage("user", userQuestion);
+
+    currentConversationHasMessages = true;
+    updateConversationToolbar();
+
     question.value = "";
 
     showTypingIndicator();
@@ -877,12 +1245,12 @@ async function askAgent(rawQuestion) {
     const response = await fetch("/api/chat", {
       method: "POST",
       credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
+      signal: generation.controller.signal,
       body: JSON.stringify({
         question: userQuestion,
         conversation_id: currentConversationId,
+        request_id: generation.requestId,
       }),
     });
 
@@ -907,7 +1275,6 @@ async function askAgent(rawQuestion) {
 
     let buffer = "";
     let finalData = null;
-
     const streamedTrace = [];
 
     function handleLine(line) {
@@ -929,6 +1296,8 @@ async function askAgent(rawQuestion) {
         renderTrace(streamedTrace, true);
       } else if (event.type === "final") {
         finalData = event;
+      } else if (event.type === "cancelled") {
+        generation.cancelled = true;
       } else if (event.type === "error") {
         throw new Error(
           event.detail || "The agent could not complete this request.",
@@ -942,12 +1311,9 @@ async function askAgent(rawQuestion) {
 
         if (done) break;
 
-        buffer += decoder.decode(value, {
-          stream: true,
-        });
+        buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split("\n");
-
         buffer = lines.pop() || "";
 
         for (const line of lines) {
@@ -966,6 +1332,11 @@ async function askAgent(rawQuestion) {
       } catch {
         // Reader already released.
       }
+    }
+
+    if (generation.cancelled) {
+      showGenerationStopped();
+      return;
     }
 
     if (!finalData) {
@@ -989,52 +1360,52 @@ async function askAgent(rawQuestion) {
   } catch (error) {
     hideTypingIndicator();
 
-    addMessage(
-      "assistant",
-      `**I couldn't complete that request.** ${
-        error.message || "An unexpected error occurred."
-      }`,
-    );
+    if (generation.cancelled || error?.name === "AbortError") {
+      showGenerationStopped();
+    } else {
+      addMessage(
+        "assistant",
+        `**I couldn't complete that request.** ${
+          error.message || "An unexpected error occurred."
+        }`,
+      );
 
-    renderTrace(["Request failed"], false);
-    sourceUsed.textContent = "Error";
+      renderTrace(["Request failed"], false);
+      sourceUsed.textContent = "Error";
+    }
   } finally {
     hideTypingIndicator();
+
+    if (activeGeneration === generation) {
+      activeGeneration = null;
+    }
+
     setRequestBusy(false);
 
     try {
       await refreshHistory(false);
     } catch {
-      // Keep the completed chat visible if history refresh fails.
+      // Keep the chat visible if history refresh fails.
     }
   }
 }
-
 question.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-
-    if (!requestInProgress) {
-      form.requestSubmit();
-    }
+    if (!requestInProgress) form.requestSubmit();
   }
 });
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-
-  if (!requestInProgress) {
-    askAgent(question.value);
-  }
+  if (!requestInProgress) askAgent(question.value);
 });
 
 document.addEventListener("click", (event) => {
   const button = event.target.closest(".example");
-
   if (!button || requestInProgress) return;
 
   event.preventDefault();
-
   askAgent(button.dataset.question || button.textContent.trim());
 });
 
@@ -1050,7 +1421,6 @@ function updateDocumentScopeUI() {
     "hidden",
     !(isAdmin && scope === "company"),
   );
-
   personalDocsPanel.classList.toggle("hidden", scope !== "personal");
 
   document.getElementById("uploadDescription").textContent =
@@ -1062,7 +1432,6 @@ function updateDocumentScopeUI() {
 function renderDocumentList(container, docs, kind) {
   if (!docs.length) {
     container.innerHTML = '<div class="empty">No documents uploaded yet.</div>';
-
     return;
   }
 
@@ -1077,13 +1446,8 @@ function renderDocumentList(container, docs, kind) {
           · ${escapeHtml(formatDate(doc.created_at) || "Recently added")}
         </span>
       </div>
-
-      <button
-        class="document-delete-btn"
-        type="button"
-        data-document-kind="${kind}"
-        data-document-id="${escapeHtml(doc.id)}"
-      >Delete</button>
+      <button class="document-delete-btn" type="button"
+        data-document-kind="${kind}" data-document-id="${escapeHtml(doc.id)}">Delete</button>
     </div>
   `,
     )
@@ -1092,7 +1456,6 @@ function renderDocumentList(container, docs, kind) {
 
 async function refreshDocuments() {
   const user = window.hrmindCurrentUser;
-
   if (!user) return;
 
   personalDocumentsList.innerHTML =
@@ -1100,7 +1463,6 @@ async function refreshDocuments() {
 
   try {
     const personal = await apiRequest("/api/documents/personal");
-
     renderDocumentList(
       personalDocumentsList,
       personal.documents || [],
@@ -1113,7 +1475,6 @@ async function refreshDocuments() {
   if (user.role === "admin") {
     try {
       const company = await apiRequest("/api/documents/company");
-
       renderDocumentList(
         companyDocumentsList,
         company.documents || [],
@@ -1131,19 +1492,16 @@ uploadScope.addEventListener("change", updateDocumentScopeUI);
 
 document.getElementById("openUpload").addEventListener("click", async () => {
   uploadModal.classList.remove("hidden");
-
   fileInput.value = "";
   fileLabel.textContent = "Choose HR document";
   uploadStatus.textContent = "";
-
   updateDocumentScopeUI();
-
   await refreshDocuments();
 });
 
-document
-  .getElementById("closeUpload")
-  .addEventListener("click", () => uploadModal.classList.add("hidden"));
+document.getElementById("closeUpload").addEventListener("click", () => {
+  uploadModal.classList.add("hidden");
+});
 
 fileInput.addEventListener("change", () => {
   fileLabel.textContent = fileInput.files?.[0]?.name || "Choose HR document";
@@ -1175,28 +1533,20 @@ uploadButton.addEventListener("click", async () => {
 
   const endpoint =
     scope === "company" ? "/api/ingest" : "/api/documents/personal";
-
   const body = new FormData();
   body.append("file", file);
 
   uploadInProgress = true;
   uploadButton.disabled = true;
   uploadButton.textContent = "Uploading and indexing…";
-
   uploadStatus.textContent =
     "Uploading document and preparing searchable chunks…";
 
   try {
-    const result = await apiRequest(endpoint, {
-      method: "POST",
-      body,
-    });
-
+    const result = await apiRequest(endpoint, { method: "POST", body });
     uploadStatus.textContent = `✓ ${result.file || file.name} indexed successfully.`;
-
     fileInput.value = "";
     fileLabel.textContent = "Choose HR document";
-
     await refreshDocuments();
   } catch (error) {
     uploadStatus.textContent = `Error: ${error.message || "Upload failed."}`;
@@ -1209,7 +1559,6 @@ uploadButton.addEventListener("click", async () => {
 
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-document-kind]");
-
   if (!button) return;
 
   const kind = button.dataset.documentKind;
@@ -1233,7 +1582,6 @@ document.addEventListener("click", async (event) => {
     );
 
     uploadStatus.textContent = "Document deleted.";
-
     await refreshDocuments();
   } catch (error) {
     uploadStatus.textContent = `Could not delete document: ${error.message}`;
@@ -1250,10 +1598,8 @@ function showTypingIndicator() {
   hideTypingIndicator();
 
   const wrap = document.createElement("div");
-
   wrap.id = "typingIndicator";
   wrap.className = "message assistant";
-
   wrap.setAttribute("role", "status");
   wrap.setAttribute("aria-live", "polite");
 
@@ -1262,15 +1608,12 @@ function showTypingIndicator() {
     <div class="bubble">
       <div class="typing-indicator">
         <span>HR Mind AI is thinking</span>
-        <div class="typing-dots" aria-hidden="true">
-          <span></span><span></span><span></span>
-        </div>
+        <div class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></div>
       </div>
     </div>
   `;
 
   chat.appendChild(wrap);
-
   scrollLatestIntoView(wrap);
 }
 
@@ -1283,21 +1626,24 @@ function hideTypingIndicator() {
 // ---------------------------------------------------------
 
 async function initializeApp() {
+  currentConversationId = null;
+  updateConversationToolbar();
+  resetChatUI();
+
   try {
-    const items = await refreshHistory(false);
-
-    if (items.length) {
-      await openConversation(items[0].id);
-    } else {
-      currentConversationId = null;
-      resetChatUI();
-    }
-
-    await refreshDocuments();
-  } catch {
-    currentConversationId = null;
-    resetChatUI();
+    // Load history for the History dialog, but do not reopen an old chat.
+    await refreshHistory(false);
+  } catch (error) {
+    console.error("Could not load conversation history:", error);
   }
+
+  try {
+    await refreshDocuments();
+  } catch (error) {
+    console.error("Could not load documents:", error);
+  }
+
+  updateConversationToolbar();
 }
 
 window.addEventListener("hrmind:authenticated", () => {
@@ -1307,22 +1653,21 @@ window.addEventListener("hrmind:authenticated", () => {
 window.addEventListener("hrmind:loggedout", () => {
   currentConversationId = null;
   conversations = [];
-
   chat.innerHTML = initialWelcomeMarkup;
-
   renderTrace([], false);
   sourceUsed.textContent = "—";
-
   historyModal.classList.add("hidden");
   uploadModal.classList.add("hidden");
   conversationActionModal.classList.add("hidden");
+  shareModal.classList.add("hidden");
+  shareModalConversationId = null;
 });
 
 function initializeGuestMode() {
   currentConversationId = null;
   conversations = [];
-
   resetChatUI();
+  updateConversationToolbar();
 
   document.getElementById("historyToggle").classList.add("hidden");
   document.getElementById("newChatBtn").classList.add("hidden");
@@ -1334,9 +1679,7 @@ function initializeGuestMode() {
   const heading = document.querySelector("#welcomeState h2");
   const intro = document.querySelector("#welcomeState p");
 
-  if (heading) {
-    heading.textContent = "Try HR Mind AI as a guest";
-  }
+  if (heading) heading.textContent = "Try HR Mind AI as a guest";
 
   if (intro) {
     intro.textContent =
@@ -1371,18 +1714,14 @@ function initializeGuestMode() {
 
   welcomeCards.forEach((card, index) => {
     const suggestion = generalQuestions[index];
-
     if (!suggestion) return;
 
     card.dataset.question = suggestion.question;
-
     const title = card.querySelector("strong");
     const description = card.querySelector("span");
 
     if (title) title.textContent = suggestion.title;
-    if (description) {
-      description.textContent = suggestion.description;
-    }
+    if (description) description.textContent = suggestion.description;
   });
 }
 

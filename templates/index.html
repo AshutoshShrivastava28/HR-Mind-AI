@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b1118" />
     <title>{{ app_name }}</title>
-    <link rel="stylesheet" href="/static/css/style.css" />
+    <link rel="stylesheet" href="/static/css/style.css?v=stop-generation-1" />
   </head>
   <body>
     <!-- Authentication screen -->
@@ -17,9 +17,7 @@
         </div>
 
         <p class="auth-eyebrow">EMPLOYEE KNOWLEDGE COPILOT</p>
-
         <h1 id="authHeading">Welcome back</h1>
-
         <p id="authIntro" class="auth-intro">
           Sign in to access your HR assistant and saved conversations.
         </p>
@@ -32,7 +30,6 @@
           >
             Sign in
           </button>
-
           <button type="button" class="auth-mode-btn" data-auth-mode="register">
             Create account
           </button>
@@ -62,11 +59,9 @@
           />
 
           <button class="auth-submit" type="submit">Sign in</button>
-
           <button id="forgotPasswordBtn" class="auth-text-btn" type="button">
             Forgot password?
           </button>
-
           <button
             id="resendVerificationBtn"
             class="auth-text-btn"
@@ -115,7 +110,6 @@
             Use at least 12 characters. Email verification is required before
             sign-in.
           </p>
-
           <button class="auth-submit" type="submit">Create account</button>
         </form>
 
@@ -130,9 +124,7 @@
             maxlength="254"
             placeholder="you@company.com"
           />
-
           <button class="auth-submit" type="submit">Send reset link</button>
-
           <button class="auth-text-btn" type="button" data-auth-mode="login">
             Back to sign in
           </button>
@@ -150,17 +142,17 @@
             maxlength="128"
             placeholder="At least 12 characters"
           />
-
           <button class="auth-submit" type="submit">Update password</button>
         </form>
+
         <button id="guestModeBtn" class="auth-guest-btn" type="button">
           Continue as guest
         </button>
-
         <p class="auth-guest-note">
           No account required. Guest sessions use public web information only
           and are not saved to conversation history.
         </p>
+
         <div
           id="authMessage"
           class="auth-message"
@@ -185,10 +177,7 @@
     <div id="appShell" class="shell hidden">
       <aside class="sidebar">
         <div>
-          <div class="brand-row">
-            <div class="brand-logo">HR Mind AI</div>
-          </div>
-
+          <div class="brand-row"><div class="brand-logo">HR Mind AI</div></div>
           <p class="muted">
             Private company HR knowledge first. External web only when evidence
             is weak.
@@ -211,12 +200,10 @@
 
         <div id="sidebarUserCard" class="sidebar-user-card">
           <span id="sidebarUserInitial" class="user-avatar">U</span>
-
           <div class="sidebar-user-copy">
             <strong id="sidebarUserName">Signed in</strong>
             <span id="sidebarUserRole">Employee</span>
           </div>
-
           <button
             id="logoutBtn"
             class="logout-btn"
@@ -295,11 +282,40 @@
               aria-label="Manage users"
               title="Manage user accounts"
             >
-              <span aria-hidden="true">♙</span>
-              <span class="manage-users-label">Users</span>
+              <span aria-hidden="true">♙</span
+              ><span class="manage-users-label">Users</span>
             </button>
           </div>
         </header>
+
+        <!-- Export and sharing controls -->
+        <div
+          id="conversationToolbar"
+          class="conversation-toolbar hidden"
+          aria-label="Current conversation actions"
+        >
+          <span class="conversation-toolbar-label">Current conversation</span>
+          <div class="conversation-toolbar-actions">
+            <button
+              id="exportConversationBtn"
+              class="topbar-action"
+              type="button"
+              disabled
+              title="Download this conversation as Markdown"
+            >
+              Export chat
+            </button>
+            <button
+              id="shareConversationBtn"
+              class="topbar-action"
+              type="button"
+              disabled
+              title="Create a read-only share link"
+            >
+              Share chat
+            </button>
+          </div>
+        </div>
 
         <section id="chat" class="chat-area">
           <div id="welcomeState" class="welcome-state">
@@ -308,7 +324,6 @@
               Your intelligent HR knowledge copilot for company policies,
               employee support, and HR information.
             </p>
-
             <div class="welcome-cards">
               <button
                 class="welcome-card example"
@@ -318,7 +333,6 @@
                 <strong>Leave &amp; Benefits</strong>
                 <span>Ask about leave entitlement and employee benefits</span>
               </button>
-
               <button
                 class="welcome-card example"
                 data-question="What is our remote work policy?"
@@ -327,7 +341,6 @@
                 <strong>Remote Work</strong>
                 <span>Ask about remote work and attendance policies</span>
               </button>
-
               <button
                 class="welcome-card example"
                 data-question="What are the company's payroll and attendance policies?"
@@ -336,7 +349,6 @@
                 <strong>Payroll &amp; Policies</strong>
                 <span>Ask about payroll, attendance, and company policies</span>
               </button>
-
               <button
                 class="welcome-card example"
                 data-question="What are the latest public holiday rules in India?"
@@ -361,7 +373,6 @@
               What are the latest public holiday rules in India?
             </button>
           </div>
-
           <form id="chatForm" class="composer">
             <textarea
               id="question"
@@ -370,6 +381,17 @@
               required
             ></textarea>
             <button type="submit" class="send-btn">Ask Agent</button>
+
+            <button
+              id="stopGenerationBtn"
+              type="button"
+              class="stop-btn hidden"
+              aria-label="Stop response generation"
+              title="Stop generating the response"
+              disabled
+            >
+              Stop
+            </button>
           </form>
         </section>
       </main>
@@ -377,14 +399,11 @@
       <aside class="trace-panel">
         <h2>Agent Trace</h2>
         <p class="muted">Watch LangGraph decisions while the request runs.</p>
-
         <div id="trace" class="trace-list">
           <div class="empty">No request yet.</div>
         </div>
-
         <div class="source-box">
-          <span>Final Source</span>
-          <strong id="sourceUsed">—</strong>
+          <span>Final Source</span><strong id="sourceUsed">—</strong>
         </div>
       </aside>
     </div>
@@ -407,30 +426,103 @@
             &times;
           </button>
         </div>
-
         <p class="muted">
           Reopen previous chats or manage your saved conversations.
         </p>
-
         <div class="history-toolbar">
           <button id="historyNewChat" class="secondary-btn" type="button">
             + New Chat
           </button>
-
           <button id="refreshHistory" class="topbar-action" type="button">
             Refresh
           </button>
         </div>
-
         <div
           id="historyStatus"
           class="history-status"
           role="status"
           aria-live="polite"
         ></div>
-
         <div id="historyList" class="history-list">
           <div class="empty">Loading conversations...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create and manage read-only share links -->
+    <div id="shareModal" class="modal hidden">
+      <div
+        class="modal-card share-modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shareTitle"
+        aria-describedby="shareDescription"
+      >
+        <div class="modal-head">
+          <h2 id="shareTitle">Share conversation</h2>
+          <button
+            id="closeShareModal"
+            type="button"
+            aria-label="Close share dialog"
+          >
+            &times;
+          </button>
+        </div>
+
+        <p id="shareDescription" class="muted">
+          Create a read-only snapshot link. Anyone with the link can view this
+          snapshot until it expires or you revoke it.
+        </p>
+
+        <button id="createShareLinkBtn" class="send-btn" type="button">
+          Create share link
+        </button>
+
+        <div id="shareLinkPanel" class="share-link-panel hidden">
+          <label for="shareLinkInput" class="share-field-label"
+            >Share link</label
+          >
+          <div class="share-link-copy-row">
+            <input
+              id="shareLinkInput"
+              type="url"
+              readonly
+              aria-label="Generated share link"
+            />
+            <button id="copyShareLinkBtn" class="secondary-btn" type="button">
+              Copy
+            </button>
+          </div>
+          <p id="shareLinkExpiry" class="muted"></p>
+        </div>
+
+        <div
+          id="shareStatus"
+          class="history-status"
+          role="status"
+          aria-live="polite"
+        ></div>
+
+        <section class="share-links-section" aria-labelledby="shareLinksTitle">
+          <div class="share-links-heading">
+            <h3 id="shareLinksTitle">Share links for this chat</h3>
+            <button
+              id="refreshShareLinksBtn"
+              class="topbar-action"
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
+          <div id="shareLinksList" class="share-links-list">
+            <div class="empty">No share links loaded.</div>
+          </div>
+        </section>
+
+        <div class="share-modal-footer">
+          <button id="cancelShareModal" class="secondary-btn" type="button">
+            Close
+          </button>
         </div>
       </div>
     </div>
@@ -454,11 +546,9 @@
             &times;
           </button>
         </div>
-
         <p id="conversationActionDescription" class="muted">
           Choose a name that's easy to recognize later.
         </p>
-
         <form id="conversationActionForm">
           <div id="conversationRenameFields">
             <label
@@ -466,7 +556,6 @@
               class="conversation-action-label"
               >Conversation name</label
             >
-
             <input
               id="conversationActionInput"
               type="text"
@@ -475,13 +564,11 @@
               placeholder="e.g. HR Policy Questions"
             />
           </div>
-
           <p
             id="conversationActionError"
             class="conversation-action-error"
             role="alert"
           ></p>
-
           <div class="conversation-action-buttons">
             <button
               id="cancelConversationAction"
@@ -490,7 +577,6 @@
             >
               Cancel
             </button>
-
             <button
               id="confirmConversationAction"
               class="conversation-confirm-btn"
@@ -514,7 +600,6 @@
       >
         <div class="modal-head">
           <h2 id="logoutConfirmTitle">Sign out?</h2>
-
           <button
             id="closeLogoutConfirm"
             type="button"
@@ -523,12 +608,10 @@
             &times;
           </button>
         </div>
-
         <p id="logoutConfirmDescription" class="muted">
           Are you sure you want to sign out of HR Mind AI? Your saved
           conversations will remain available the next time you sign in.
         </p>
-
         <div class="conversation-action-buttons">
           <button
             id="cancelLogout"
@@ -537,7 +620,6 @@
           >
             Stay signed in
           </button>
-
           <button
             id="confirmLogout"
             class="conversation-confirm-btn danger"
@@ -548,6 +630,7 @@
         </div>
       </div>
     </div>
+
     <!-- Administrator user management -->
     <div id="userManagementModal" class="modal hidden">
       <div
@@ -566,21 +649,19 @@
             &times;
           </button>
         </div>
-
         <p class="muted">Review accounts, verification status, and roles.</p>
-
         <div
           id="userManagementStatus"
           class="history-status"
           role="status"
           aria-live="polite"
         ></div>
-
         <div id="userManagementList" class="user-management-list">
           <div class="empty">Loading users...</div>
         </div>
       </div>
     </div>
+
     <!-- Company and personal document management -->
     <div id="uploadModal" class="modal hidden">
       <div
@@ -599,48 +680,39 @@
             &times;
           </button>
         </div>
-
         <p id="uploadDescription" class="muted">
           Upload a document to the company knowledge base or to your private
           documents.
         </p>
-
         <div id="uploadScopeRow">
           <label for="uploadScope" class="conversation-action-label"
             >Document access</label
           >
-
           <select id="uploadScope">
             <option value="personal">Private to my account</option>
             <option value="company">Company HR knowledge base</option>
           </select>
         </div>
-
         <label for="fileInput" class="file-picker">
           <span id="fileLabel">Choose HR document</span>
           <span class="file-hint">PDF, TXT, MD or DOCX · 10 MB max</span>
         </label>
-
         <input id="fileInput" type="file" accept=".pdf,.txt,.md,.docx" hidden />
-
         <button id="uploadBtn" class="send-btn full" type="button">
           Upload and index
         </button>
-
         <div
           id="uploadStatus"
           class="upload-status"
           role="status"
           aria-live="polite"
         ></div>
-
         <div id="personalDocsPanel" class="document-list-panel">
           <h3>My private documents</h3>
           <div id="personalDocumentsList" class="document-list">
             <div class="empty">Loading documents...</div>
           </div>
         </div>
-
         <div id="companyDocsPanel" class="document-list-panel hidden">
           <h3>Company documents</h3>
           <div id="companyDocumentsList" class="document-list">
@@ -653,7 +725,7 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=stop-generation-1"></script>
     <script src="/static/js/admin.js"></script>
   </body>
 </html>
