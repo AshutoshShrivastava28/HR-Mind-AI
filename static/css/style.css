@@ -3540,3 +3540,59 @@ textarea:focus-visible {
     padding-inline: 12px;
   }
 }
+
+/* Mobile Add Document shortcut beside History. The desktop sidebar button remains unchanged. */
+.mobile-upload-header-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-raised);
+  color: var(--text-soft);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.mobile-upload-header-btn:hover {
+  border-color: #293747;
+  background: #111923;
+  color: #e8f0f7;
+}
+
+.mobile-upload-header-btn svg {
+  flex-shrink: 0;
+}
+
+.mobile-upload-header-btn:focus-visible {
+  outline: 2px solid #52dfab;
+  outline-offset: 3px;
+}
+
+@media (max-width: 760px) {
+  .mobile-upload-header-btn {
+    display: inline-flex;
+    min-height: 35px;
+    padding: 7px 9px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 420px) {
+  .mobile-upload-header-btn {
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+  }
+
+  .mobile-upload-label {
+    display: none;
+  }
+}

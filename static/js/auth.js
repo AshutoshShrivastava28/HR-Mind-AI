@@ -177,6 +177,7 @@
     const isAdmin = user.role === "admin";
 
     document.getElementById("openUpload").classList.toggle("hidden", isGuest);
+    document.getElementById("openUploadMobile").classList.toggle("hidden", isGuest);
 
     document
       .getElementById("historyToggle")
@@ -249,19 +250,30 @@
         }),
       });
 
+      const registeredEmail = String(form.get("email") || "").trim();
+      const registeredPassword = String(form.get("password") || "");
+      const registeredName = String(form.get("display_name") || "").trim();
+
+      // Return to sign-in immediately after the server confirms registration.
+      loginEmail.value = registeredEmail;
+      setBusy(false);
+      setMode("login", false);
       showMessage(
-        result.message || "Account created. Verify your email to continue.",
+        result.message ||
+          "Account created. Check your email for the verification link, then sign in.",
       );
-      await offerToSavePassword(
-        String(form.get("email") || "").trim(),
-        String(form.get("password") || ""),
-        String(form.get("display_name") || "").trim(),
-      );
+
       if (result.development_verification_url) {
         showDevelopmentLink(result.development_verification_url);
       }
 
-      loginEmail.value = String(form.get("email") || "").trim();
+      // Clear the hidden form while preserving values for the browser password manager.
+      registerForm.reset();
+      void offerToSavePassword(
+        registeredEmail,
+        registeredPassword,
+        registeredName,
+      );
     } catch (error) {
       showMessage(error.message, true);
     } finally {

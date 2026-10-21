@@ -50,6 +50,7 @@ const uploadModal = document.getElementById("uploadModal");
 const fileInput = document.getElementById("fileInput");
 const fileLabel = document.getElementById("fileLabel");
 const uploadButton = document.getElementById("uploadBtn");
+const mobileUploadButton = document.getElementById("openUploadMobile");
 const uploadScope = document.getElementById("uploadScope");
 const uploadStatus = document.getElementById("uploadStatus");
 const personalDocumentsList = document.getElementById("personalDocumentsList");
@@ -1490,14 +1491,17 @@ async function refreshDocuments() {
 
 uploadScope.addEventListener("change", updateDocumentScopeUI);
 
-document.getElementById("openUpload").addEventListener("click", async () => {
+async function openUploadDialog() {
   uploadModal.classList.remove("hidden");
   fileInput.value = "";
   fileLabel.textContent = "Choose HR document";
   uploadStatus.textContent = "";
   updateDocumentScopeUI();
   await refreshDocuments();
-});
+}
+
+document.getElementById("openUpload").addEventListener("click", openUploadDialog);
+mobileUploadButton.addEventListener("click", openUploadDialog);
 
 document.getElementById("closeUpload").addEventListener("click", () => {
   uploadModal.classList.add("hidden");
@@ -1672,6 +1676,7 @@ function initializeGuestMode() {
   document.getElementById("historyToggle").classList.add("hidden");
   document.getElementById("newChatBtn").classList.add("hidden");
   document.getElementById("openUpload").classList.add("hidden");
+  document.getElementById("openUploadMobile").classList.add("hidden");
   document.getElementById("manageUsersHeaderBtn").classList.add("hidden");
 
   question.placeholder = "Ask a general HR question using public information…";
