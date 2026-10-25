@@ -13,6 +13,7 @@
   const resetPasswordForm = document.getElementById("resetPasswordForm");
   const authModeSwitch = document.getElementById("authModeSwitch");
 
+  const resendVerificationBtn = document.getElementById("resendVerificationBtn");
   const loginEmail = document.getElementById("loginEmail");
   const loginPassword = document.getElementById("loginPassword");
   const uploadScope = document.getElementById("uploadScope");
@@ -222,6 +223,7 @@
     // Also reset partially completed registration or reset forms.
     registerForm.reset();
     resetPasswordForm.reset();
+      resendVerificationBtn.classList.add("hidden");
 
     setMode("login", false);
     showMessage("");
@@ -256,6 +258,11 @@
 
       // Return to sign-in immediately after the server confirms registration.
       loginEmail.value = registeredEmail;
+      // Show resend verification only after successful registration.
+      // Ensure the mode switch is allowed before showing the login form.
+      setBusy(false);
+      setMode("login", false);
+      resendVerificationBtn.classList.remove("hidden");
       setBusy(false);
       setMode("login", false);
       showMessage(
@@ -405,6 +412,7 @@
 
   document.querySelectorAll("[data-auth-mode]").forEach((button) => {
     button.addEventListener("click", () => {
+      resendVerificationBtn.classList.add("hidden");
       setMode(button.dataset.authMode);
     });
   });
@@ -416,7 +424,10 @@
 
   document
     .getElementById("forgotPasswordBtn")
-    .addEventListener("click", () => setMode("reset-request"));
+    .addEventListener("click", () => {
+    resendVerificationBtn.classList.add("hidden");
+    setMode("reset-request");
+  });
 
   document
     .getElementById("resendVerificationBtn")
