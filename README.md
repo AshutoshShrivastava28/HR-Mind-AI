@@ -1,80 +1,130 @@
 # HR Mind AI
 
-**An Agentic RAG HR knowledge copilot for answering employee questions using trusted internal HR documents first, with web search as a fallback when private evidence is insufficient.**
+<p align="center">
+  <strong>An Agentic RAG HR Knowledge Copilot</strong><br />
+  <em>Ground employee answers in trusted HR documents, surface sources, and fall back to public web evidence only when private evidence is insufficient.</em>
+</p>
 
-[![Live Application](https://img.shields.io/badge/Live%20App-Open%20HR%20Mind%20AI-20a779)](https://hrmindai.dpdns.org/)
-[![Python](https://img.shields.io/badge/Python-3.12-blue)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)](https://fastapi.tiangolo.com/)
-[![Docker](https://img.shields.io/badge/Deployment-Docker-2496ED)](https://www.docker.com/)
+<p align="center">
+  <a href="https://hrmindai.dpdns.org/"><img src="https://img.shields.io/badge/Live%20Application-Open%20HR%20Mind%20AI-20a779?style=for-the-badge" alt="Live application" /></a>
+  <a href="https://github.com/AshutoshShrivastava28/HR-Mind-AI"><img src="https://img.shields.io/badge/Source-GitHub-181717?style=for-the-badge&logo=github" alt="GitHub repository" /></a>
+</p>
 
-## Live Links
-
-- **Application:** https://hrmindai.dpdns.org/
-- **Product overview:** https://hrmindai.dpdns.org/home
-- **Privacy policy:** https://hrmindai.dpdns.org/privacy
-- **Terms of service:** https://hrmindai.dpdns.org/terms
-- **Repository:** https://github.com/AshutoshShrivastava28/HR-Mind-AI
-
-HR Mind AI is deployed on a DigitalOcean Droplet using Docker. Caddy terminates HTTPS and routes requests to the application container.
-
-> **Demo note:** HR Mind AI is a portfolio project. AI-generated information can be incomplete or inaccurate. Verify important policy information against the original document and an authorised HR representative. Do not upload confidential employee records or sensitive company information unless you have permission and have confirmed that the service is approved for that use.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12" />
+  <img src="https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Agent%20Orchestration-LangGraph-6B46C1" alt="LangGraph" />
+  <img src="https://img.shields.io/badge/LLM-GPT--OSS%20120B-412991" alt="GPT-OSS 120B via Groq" />
+  <img src="https://img.shields.io/badge/Vector%20Database-Pinecone-0B8F87" alt="Pinecone" />
+  <img src="https://img.shields.io/badge/Deployment-Docker-2496ED?logo=docker&logoColor=white" alt="Docker" />
+</p>
 
 ---
+
+## Contents
+
+- [Overview](#overview)
+- [Live application](#live-application)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Technology stack](#technology-stack)
+- [Project structure](#project-structure)
+- [Getting started locally](#getting-started-locally)
+- [Run with Docker](#run-with-docker)
+- [Tests](#tests)
+- [Production deployment](#production-deployment)
+- [Gmail API and secret handling](#gmail-api-and-secret-handling)
+- [Demo walkthrough](#demo-walkthrough)
+- [Limitations and responsible use](#limitations-and-responsible-use)
+- [License](#license)
 
 ## Overview
 
-HR teams often maintain leave policies, remote-work rules, benefits information, payroll guidance, onboarding materials, conduct policies, and operational runbooks across multiple documents. Employees may not know where the right policy is located, while a generic chatbot may produce answers that are not supported by company policy.
+HR teams distribute leave rules, remote-work policies, benefits, payroll guidance, onboarding material, conduct policies, and operational procedures across documents. Employees may struggle to find the right provision, while a general-purpose chatbot can confidently produce answers that are not supported by company policy.
 
-HR Mind AI provides a conversational interface over a configurable HR knowledge base. It retrieves relevant private documents, evaluates the evidence, and uses the configured web-search fallback only when the internal evidence is insufficient. Its workflow exposes the major routing and retrieval decisions to support debugging and demonstrations.
+**HR Mind AI** is a conversational assistant built around Retrieval-Augmented Generation (RAG). It prioritizes an organisation's private HR knowledge base, evaluates whether retrieved evidence is sufficient, and can use public web search as a fallback. Answers can be presented with source citations and a trace of the workflow decisions that led to the response.
 
-### Example questions
+The project also includes an administrator-facing document workspace, policy lifecycle and version metadata, a public product showcase, account/email workflows, and an Answer Quality dashboard built from application audit events and user feedback.
 
-- “How many annual leave days do employees receive?”
-- “How many days per week can I work remotely?”
-- “What are the latest public holiday rules in Italy?”
+> **Portfolio-project notice:** AI output can be incomplete or incorrect. Verify important policy decisions against the original document and an authorised HR representative. Do not upload confidential employee records or sensitive company information unless you have permission and the service is approved for that use.
 
-When an answer is available in the internal knowledge base, the system should answer from that knowledge without using web search. Questions requiring current public information can follow the web fallback path, and externally sourced information should be checked before being applied as company policy.
+## Live application
 
-## Key Features
+| Area | Link | Access |
+|---|---|---|
+| HR Mind AI app | [hrmindai.dpdns.org](https://hrmindai.dpdns.org/) | Application entry point |
+| Public showcase | [Open showcase](https://hrmindai.dpdns.org/showcase) | Public-facing product overview / demo |
+| Document management | [Open documents](https://hrmindai.dpdns.org/documents) | Sign in; administrative actions require appropriate permissions |
+| Answer Quality dashboard | [Open dashboard](https://hrmindai.dpdns.org/quality) | Sign in; analytics API is administrator-protected |
+| Privacy policy | [Read privacy policy](https://hrmindai.dpdns.org/privacy) | Public |
+| Terms of service | [Read terms](https://hrmindai.dpdns.org/terms) | Public |
+| Source code | [GitHub repository](https://github.com/AshutoshShrivastava28/HR-Mind-AI) | Public repository |
 
-### Agentic RAG
+The live deployment runs on a DigitalOcean Droplet. Docker hosts the application, while Caddy terminates HTTPS and reverse-proxies requests to the application container. Application databases, uploaded files, and Gmail OAuth credentials are stored on persistent server mounts rather than being treated as disposable container data.
 
-- **Private knowledge first:** retrieve relevant HR material from Pinecone before considering external search.
-- **Evidence grading:** evaluate whether retrieved passages sufficiently support an answer.
-- **Conditional routing:** use LangGraph to coordinate retrieval, grading, web fallback, query rewriting, and answer generation.
+## Features
+
+### 1. Policy-aware Agentic RAG
+
+- **Private knowledge first:** retrieve company and, where applicable, user-specific documents before considering public web information.
+- **Evidence grading:** evaluate whether retrieved passages are sufficient to support an answer.
+- **Conditional workflow:** coordinate retrieval, evidence grading, web fallback, query rewriting, and answer generation through LangGraph.
 - **Web fallback:** use Tavily when private evidence is weak or insufficient.
-- **Query rewriting and retries:** reformulate weak or ambiguous queries and retry retrieval within the configured limit.
-- **Grounded responses:** return an insufficient-evidence response rather than inventing a company policy when evidence remains inadequate.
-- **Sources and agent trace:** expose relevant sources and workflow decisions in the interface for transparency and debugging.
+- **Bounded retry path:** rewrite a query and retry within the configured retry limit when the workflow calls for it.
+- **Insufficient-evidence response:** avoid presenting an unsupported answer as established company policy when available evidence is inadequate.
+- **Visible sources and trace:** show citations and useful workflow steps so users can inspect where an answer came from.
 
-### Accounts and email workflows
+### 2. Policy lifecycle and version awareness
 
-- Account registration and sign-in.
-- Email verification, including a resend-verification flow.
-- Forgot-password and password-reset flow.
-- Password-reset success returns the user to the sign-in form.
-- Authentication endpoints include rate limiting and require HTTPS for non-local requests.
-- Gmail API delivery over HTTPS for transactional messages such as verification and password-reset emails. SMTP remains available as a fallback when configured.
-- Guest mode for public-web questions; guest conversations are not saved to signed-in account history.
+- Store policy metadata such as policy family, version label, status, effective date, and superseded-version relationship.
+- Support the lifecycle states **Draft**, **Active**, and **Superseded**.
+- Filter draft or superseded company-policy chunks from normal retrieval as appropriate to the lifecycle rules.
+- Identify potential ambiguity when more than one active version exists in a policy family.
+- Re-index affected documents when policy lifecycle metadata changes.
 
-### Knowledge and document management
+These controls help the retrieval workflow prefer current, approved material. They do not replace HR review of policy wording, applicability, or effective dates.
 
-- Upload HR knowledge documents in supported formats including PDF, TXT, Markdown, and DOCX.
-- Extract text, split it into chunks, create embeddings using FastEmbed, and store searchable vectors in Pinecone.
-- Use uploaded material as the source for private-knowledge retrieval.
-- Support account and document administration according to the application's configured permissions.
+### 3. Document management
 
-### Application and operations
+- Upload HR knowledge documents in supported formats, including PDF, TXT, Markdown, and DOCX.
+- Extract document text and split it into searchable chunks.
+- Generate embeddings with FastEmbed and store vectors in Pinecone.
+- Manage company and user-specific documents according to the application's access rules.
+- Re-index documents and update policy metadata through the relevant workspace flows.
+- Support document removal and vector cleanup through the document APIs.
 
-- FastAPI backend with a JavaScript, HTML, and CSS frontend.
-- SQLite-backed application data and audit records.
-- Docker container deployment on DigitalOcean.
-- HTTPS domain, public product overview, privacy policy, and terms of service.
-- Persistent server mounts for application data and uploaded files.
+### 4. Answer Quality dashboard
 
----
+The `/quality` workspace presents aggregate quality and usage signals from the application's audit events. Depending on the data available, these include:
 
-## Architecture
+- Recorded answers and source usage.
+- Citation counts and source-engagement events.
+- Knowledge-base and web-evidence grading outcomes.
+- HR topic coverage and evidence-gap signals.
+- Submitted helpfulness feedback and feedback reasons.
+
+The dashboard is designed to report recorded behavior rather than manufacture ratings. **Citation presence is not the same as citation correctness**, and missing feedback means answer helpfulness has not yet been rated by a user. Empty panels are a data-availability state, not proof that the system is performing well or poorly.
+
+### 5. Accounts, access, and email
+
+- User registration and sign-in.
+- Email verification and resend-verification flow.
+- Forgot-password and password-reset workflow.
+- Rate limiting on authentication endpoints.
+- Guest mode for public-web questions; guest conversations are not saved to a signed-in user's conversation history.
+- Gmail API over HTTPS for transactional email, with optional SMTP fallback when configured.
+- Administrator-specific APIs for privileged document and dashboard actions.
+
+### 6. Product and user experience
+
+- Public product showcase at `/showcase`.
+- Dedicated document management workspace at `/documents`.
+- Answer Quality dashboard at `/quality`.
+- Conversation history for signed-in users.
+- Source/citation interaction tracking for the quality dashboard.
+- Public privacy policy, terms of service, and read-only shared-conversation page support where a valid share link is available.
+
+## How it works
 
 ![HR Mind AI Architecture](docs/Architecture.png)
 
@@ -82,102 +132,114 @@ When an answer is available in the internal knowledge base, the system should an
 
 ```mermaid
 flowchart TD
-    A[Employee or HR user] --> B[Web UI]
+    A[Employee or HR user] --> B[Web interface]
     B --> C[FastAPI API]
-    C --> D[LangGraph controller]
-    D --> E{Question type}
-    E -->|Greeting or simple chat| F[Direct response]
-    E -->|HR or policy question| G[Retrieve private HR knowledge]
-    G --> H[Grade retrieved evidence]
-    H -->|Sufficient| I[Generate grounded answer]
-    H -->|Insufficient| J[Tavily web search]
-    J --> K[Grade web evidence]
-    K -->|Sufficient| L[Generate answer using external evidence]
-    K -->|Insufficient| M[Rewrite query and retry private retrieval]
-    M --> N{Retry limit reached?}
-    N -->|No| G
-    N -->|Yes| O[Return insufficient-evidence response]
-    I --> P[Answer, sources, and agent trace]
-    F --> P
-    L --> P
+    C --> D[LangGraph workflow]
+    D --> E{Simple greeting or acknowledgement?}
+    E -->|Yes| F[Direct response]
+    E -->|No| G[Retrieve HR knowledge]
+    G --> H[Apply policy lifecycle filtering]
+    H --> I[Grade private evidence]
+    I -->|Sufficient| J[Generate answer from private evidence]
+    I -->|Insufficient| K[Tavily web search]
+    K --> L[Grade web evidence]
+    L -->|Sufficient| M[Generate answer with external sources]
+    L -->|Insufficient and retries remain| N[Rewrite query]
+    N --> G
+    L -->|Insufficient and retry limit reached| O[Insufficient-evidence response]
+    F --> P[Answer, citations and trace]
+    J --> P
+    M --> P
     O --> P
 ```
 
-### Deployment flow
+The lightweight routing step avoids an extra LLM call for common greetings and acknowledgements. HR and other substantive questions proceed through knowledge retrieval. GPT-OSS 120B, served through Groq, is the configured model for the LLM workflow.
+
+### Production request path
 
 ```text
 Browser
-  |
-  | HTTPS
-  v
+  │ HTTPS
+  ▼
 Caddy reverse proxy / TLS
-  |
-  v
+  │
+  ▼
 HR Mind AI Docker container
-  |
-  +--> FastAPI and LangGraph
-  +--> Groq language model
-  +--> Pinecone vector database
-  +--> Tavily web search (fallback)
-  +--> Persistent application data and uploads
-  +--> Gmail API over HTTPS (transactional email)
+  ├── FastAPI application and LangGraph workflow
+  ├── Groq — GPT-OSS 120B
+  ├── Pinecone — searchable document vectors
+  ├── Tavily — public web-search fallback
+  ├── Persistent application data and uploads
+  └── Gmail API — verification and password-reset email
 ```
 
-## Technology Stack
+## Technology stack
 
-| Layer                 | Technology                                   | Role                                                          |
-| --------------------- | -------------------------------------------- | ------------------------------------------------------------- |
-| Agent orchestration   | LangGraph                                    | Stateful workflow, conditional routing, retries               |
-| LLM                   | Groq (`openai/gpt-oss-120b`)                 | Routing, evidence grading, query rewriting, answer generation |
-| Embeddings            | FastEmbed (`all-MiniLM-L6-v2`)               | Local text embedding generation                               |
-| Vector database       | Pinecone                                     | Searchable HR knowledge base                                  |
-| Web search            | Tavily                                       | External fallback when private evidence is insufficient       |
-| Backend               | FastAPI, Python                              | HTTP API and application logic                                |
-| Frontend              | HTML, CSS, JavaScript                        | Employee-facing interface and auth flows                      |
-| Application data      | SQLite                                       | Account-related and application records, including audit data |
-| Email                 | Gmail API over HTTPS; optional SMTP fallback | Verification and password-reset messages                      |
-| Packaging             | Docker                                       | Containerized runtime                                         |
-| Reverse proxy / HTTPS | Caddy                                        | TLS and routing to the application                            |
-| Hosting               | DigitalOcean Droplet                         | Live deployment                                               |
+| Layer | Technology | Purpose |
+|---|---|---|
+| Language | Python 3.12 | Backend and workflow implementation |
+| API framework | FastAPI | HTTP routes, streaming chat, and application services |
+| Agent orchestration | LangGraph | Stateful workflow and conditional transitions |
+| LLM | Groq `openai/gpt-oss-120b` | Routing-related generation, evidence grading, query rewriting, and answers |
+| Embeddings | FastEmbed `all-MiniLM-L6-v2` | Local embedding generation for retrieval |
+| Vector database | Pinecone | Semantic search over HR document chunks |
+| Web search | Tavily | External fallback when private evidence is insufficient |
+| Data storage | SQLite | Account, conversation, and audit/quality records |
+| Frontend | HTML, CSS, JavaScript | Chat, document workspace, authentication, and dashboard UI |
+| Email | Gmail API; optional SMTP fallback | Verification and password-reset email delivery |
+| Containerization | Docker | Reproducible runtime environment |
+| Reverse proxy | Caddy | HTTPS termination and request proxying |
+| Hosting | DigitalOcean Droplet | Live application hosting |
+| Testing | pytest | Unit and API-level regression tests |
 
----
-
-## Repository Structure
+## Project structure
 
 ```text
 HR-Mind-AI/
 ├── app/
 │   ├── api/
-│   │   ├── routes.py             # Main application API routes
-│   │   └── auth_routes.py        # Registration, login, verification, reset flows
+│   │   ├── routes.py                 # Chat, document, and quality APIs
+│   │   └── auth_routes.py            # Registration, login, verification, password reset
 │   ├── core/
-│   │   ├── config.py             # Application settings
-│   │   └── logging.py            # Logging configuration
+│   │   ├── config.py                 # Environment-backed settings
+│   │   └── logging.py                # Logging configuration
 │   ├── rag/
-│   │   ├── state.py              # Agent state
-│   │   ├── vectorstore.py        # Pinecone and retrieval integration
-│   │   └── workflow.py           # LangGraph workflow
+│   │   ├── policy_lifecycle.py       # Policy status/version filtering
+│   │   ├── state.py                  # LangGraph state and grading schemas
+│   │   ├── vectorstore.py            # Pinecone retrieval and vector operations
+│   │   └── workflow.py               # RAG and web-fallback workflow
 │   ├── services/
-│   │   ├── authentication.py     # Authentication and session helpers
-│   │   ├── audit.py              # Audit logging
-│   │   ├── email_sender.py       # Gmail API / SMTP email delivery
-│   │   ├── ingestion.py          # Document ingestion
-│   │   └── rate_limiter.py       # Request rate limiting
-│   └── main.py                   # FastAPI application entry point
-├── data/
-│   └── sample_kb/                 # Sample HR knowledge material
+│   │   ├── authentication.py         # Account, session, and document metadata helpers
+│   │   ├── audit.py                  # Audit events, answer feedback, quality aggregates
+│   │   ├── email_sender.py           # Gmail API / SMTP delivery
+│   │   ├── ingestion.py              # Document extraction and chunking
+│   │   ├── rate_limiter.py           # Request rate limiting
+│   │   └── upload_validation.py      # Upload validation
+│   └── main.py                       # FastAPI app and HTML page routes
 ├── docs/
-│   └── Architecture.png
+│   └── Architecture.png              # Architecture diagram
 ├── static/
 │   ├── css/
-│   │   └── style.css
+│   │   ├── style.css                 # Shared application styling
+│   │   └── quality.css               # Answer Quality dashboard styling
 │   └── js/
-│       ├── app.js                 # Chat and RAG interface
-│       └── auth.js                # Sign-in, registration, and reset UI
+│       ├── app.js                    # Chat and conversation interface
+│       ├── auth.js                   # Authentication interface
+│       ├── documents.js              # Document workspace interactions
+│       └── quality.js                # Dashboard and feedback interactions
 ├── templates/
-│   └── index.html
+│   ├── index.html                    # Main application
+│   ├── documents.html                # Document management workspace
+│   └── quality.html                  # Answer Quality dashboard
 ├── tests/
-├── uploads/
+│   ├── test_answer_quality.py
+│   ├── test_auth_security.py
+│   ├── test_deletion_edge_cases.py
+│   ├── test_document_routes.py
+│   ├── test_policy_lifecycle_retrieval.py
+│   └── test_upload_validation.py
+├── data/                             # Local/runtime data; do not commit secrets or production data
+├── uploads/                          # Uploaded documents; do not commit private documents
 ├── Dockerfile
 ├── requirements.txt
 ├── ingest_sample_kb.py
@@ -185,15 +247,17 @@ HR-Mind-AI/
 └── README.md
 ```
 
----
+> The tree lists key project files. Additional templates and support modules may exist in the repository.
 
-## Local Development
+## Getting started locally
 
 ### Prerequisites
 
 - Python 3.12
-- Access to configured Groq, Pinecone, and Tavily services
-- Docker Desktop, if running the containerized version
+- Groq API access for LLM-backed requests
+- Pinecone API access and an index configured for the selected embedding model
+- Tavily API access for web fallback
+- Docker Desktop (optional, for a containerized local run)
 
 ### 1. Clone the repository
 
@@ -202,7 +266,7 @@ git clone https://github.com/AshutoshShrivastava28/HR-Mind-AI.git
 cd HR-Mind-AI
 ```
 
-### 2. Create and activate a virtual environment
+### 2. Create a virtual environment
 
 **Windows PowerShell**
 
@@ -227,7 +291,7 @@ python -m pip install -r requirements.txt
 
 ### 4. Configure environment variables
 
-Create a local `.env` file in the repository root. Do not commit it. Set real values for the required provider keys and use a unique secret for administrative access.
+Create a local `.env` file in the repository root. Keep it out of Git. Replace the placeholders with your own credentials and use a long, unique administrative secret.
 
 ```env
 # AI and retrieval providers
@@ -242,11 +306,11 @@ MAX_RETRIES=1
 
 # Application and authentication
 APP_ENV=development
-ADMIN_EMAIL=your_admin_email@example.com
+ADMIN_EMAIL=admin@example.com
 ADMIN_API_KEY=replace_with_a_long_random_secret
 PUBLIC_BASE_URL=http://127.0.0.1:8000
 
-# Optional SMTP fallback for local email delivery
+# Optional SMTP fallback
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USERNAME=
@@ -255,19 +319,15 @@ SMTP_FROM_EMAIL=
 SMTP_USE_TLS=true
 ```
 
-Configuration is loaded through `app/core/config.py`. If you use a different Pinecone index, namespace, or embedding model, configure these values to match your actual vector index and ingestion settings.
+Configuration is loaded through `app/core/config.py`. Align the Pinecone index, namespace, and embedding model with the index used during document ingestion. If Gmail API email is being tested locally, configure OAuth credentials through the app's supported configuration path; do not copy production OAuth credentials into the repository.
 
-For local development, email can use the SMTP fallback when configured. The live deployment's Gmail API credentials are kept separately on the server and must **not** be copied into the repository or included in a Docker image.
+### 5. Ingest sample HR documents (optional)
 
-### 5. Load the sample knowledge base (optional)
-
-After configuring Pinecone and the required API keys, ingest the sample HR knowledge:
+After configuring the provider keys and Pinecone index, run this only if you intend to populate or update that index:
 
 ```bash
 python ingest_sample_kb.py
 ```
-
-Run this only when you intend to populate or update the configured index and namespace.
 
 ### 6. Start the application
 
@@ -275,13 +335,11 @@ Run this only when you intend to populate or update the configured index and nam
 python run.py
 ```
 
-Open the local app at http://127.0.0.1:8000. If the FastAPI interactive documentation is enabled, it is available at http://127.0.0.1:8000/docs.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The application uses configured provider credentials for LLM generation, semantic retrieval, and web fallback. If the interactive FastAPI documentation is enabled in your local environment, it is available at `/docs`.
 
----
+## Run with Docker
 
-## Docker
-
-### Build the image
+### Build
 
 ```bash
 docker build -t hr-mind-ai:local .
@@ -289,7 +347,7 @@ docker build -t hr-mind-ai:local .
 
 ### Run locally
 
-Make sure the `.env` file has been created and configured first.
+Create and configure `.env` first. The following command creates named volumes for persistent local data and uploads:
 
 ```bash
 docker run -d \
@@ -302,108 +360,91 @@ docker run -d \
   hr-mind-ai:local
 ```
 
-Then open http://127.0.0.1:8000.
-
-The FastAPI process listens on container port `10000`. The command above publishes it on local port `8000`. Named volumes preserve the container's `/app/data` and `/app/uploads` directories across container recreation.
-
-To inspect logs:
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 ```bash
+# Follow logs
 docker logs -f hr-mind-ai-local
-```
 
-To stop the local container:
-
-```bash
+# Stop the local container
 docker stop hr-mind-ai-local
 ```
 
----
+The application listens on port `10000` inside the container; port `8000` is published on the host. Named volumes keep `/app/data` and `/app/uploads` across container recreation.
 
-## Production Deployment
+## Tests
 
-The live application is hosted on a DigitalOcean Droplet. Caddy handles HTTPS for `hrmindai.dpdns.org` and reverse-proxies requests to the application container. The application container listens internally on port `10000`; the production setup keeps the backend behind the reverse proxy rather than relying on the old direct IP-based HTTP link.
+The test suite covers answer-quality event handling, authentication/security, document-route access and deletion cases, policy lifecycle retrieval, and upload validation.
 
-### Persistent data
+Activate your virtual environment, then run:
 
-The live deployment uses persistent server storage for application data and uploaded documents. Its Gmail OAuth credential file is stored separately on the server and mounted into the container at `/app/data/gmail_oauth.json`.
+```bash
+python -m pytest -q
+```
 
-When updating or recreating a production container:
+The full suite passed **36 tests** during validation of the current application changes. The Starlette test client may emit a deprecation warning; a warning is not a test failure.
 
-1. Build the image from the reviewed and committed repository source.
-2. Preserve the existing runtime environment and persistent data mounts.
-3. Keep the Gmail OAuth credential file outside the Git repository and Docker build context.
-4. Validate the image and application health before replacing the running container.
-5. Confirm login, registration, email verification, password reset, document retrieval, and chat after deployment.
+## Production deployment
 
-A `git push` by itself does not update the running DigitalOcean container unless an automated deployment pipeline has been configured. The production container must be deliberately updated from a reviewed image/source release.
+The live application is hosted on a DigitalOcean Droplet, with Caddy handling HTTPS for `hrmindai.dpdns.org` and reverse-proxying to the Docker container. The app listens internally on port `10000`.
 
----
+**Pushing to GitHub does not, by itself, update the live Docker container.** Deploy an intentional, reviewed release and validate it before replacing the running container.
 
-## Gmail API Configuration and Secret Handling
+### Production deployment checklist
 
-The deployed application uses the Gmail API over HTTPS to send transactional messages, avoiding a dependency on direct outbound SMTP connectivity. The existing SMTP implementation remains available as a fallback when its settings are configured.
+1. Run the full test suite locally.
+2. Commit and push the reviewed source to GitHub.
+3. Build the Docker image from the intended commit.
+4. Preserve the existing environment and persistent mounts.
+5. Keep databases, uploaded HR documents, and OAuth credentials outside the disposable container layer and version control.
+6. Run local health checks before switching traffic.
+7. Confirm HTTPS, sign-in, registration, verification, password reset, document management, chat, citations, and the Answer Quality dashboard.
+8. Retain the previous container/image until the new release passes smoke tests.
 
-The server-side Gmail credential file has the following structure:
+The live deployment uses persistent storage for application databases and uploaded documents. The Gmail OAuth credential file is stored separately on the server and mounted into the container at `/app/data/gmail_oauth.json`. Do not delete or overwrite these persistent files during deployment.
+
+## Gmail API and secret handling
+
+The production application uses the Gmail API over HTTPS for transactional messages such as email verification and password reset. SMTP remains available as an optional fallback when configured.
+
+The server-side Gmail OAuth file has this general structure:
 
 ```json
 {
   "client_id": "YOUR_OAUTH_CLIENT_ID",
   "client_secret": "YOUR_OAUTH_CLIENT_SECRET",
   "refresh_token": "YOUR_REFRESH_TOKEN",
-  "sender_email": "your_authorized_sender@example.com"
+  "sender_email": "authorized-sender@example.com"
 }
 ```
 
-This example shows the expected **field names only**. Never commit real credentials, refresh tokens, API keys, passwords, or `.env` files. In the production deployment, restrict file permissions on the credential file and keep it on persistent server storage outside version control and Docker build context.
+These are placeholder field names, not working credentials. Never commit API keys, OAuth secrets, refresh tokens, passwords, `.env` files, production databases, or private uploads. Restrict permissions on server-side credentials. OAuth tokens can be revoked or invalidated; monitor transactional email delivery and re-authorize when needed.
 
-The Gmail integration is intended for sending verification and password-reset messages using the `gmail.send` permission. Refresh tokens can still be revoked or invalidated, so monitor email delivery and be prepared to reauthorize the account if needed.
+## Demo walkthrough
 
----
+A concise end-to-end demonstration can follow this sequence:
 
-## Demo Scenarios
+1. **Explore the showcase:** open `/showcase` to introduce the product and its workflow.
+2. **Sign in:** demonstrate account access and the main conversational interface.
+3. **Manage knowledge:** in `/documents`, upload a non-sensitive sample HR policy and inspect its document metadata.
+4. **Demonstrate policy lifecycle:** show policy family, version, effective date, status, and supersession metadata where configured.
+5. **Ask a policy question:** ask about leave, remote work, benefits, or another topic represented in the uploaded sample documents. Inspect the answer's citations and workflow trace.
+6. **Test insufficient evidence:** ask a question not answered by the private policy material and demonstrate the configured fallback or insufficient-evidence response.
+7. **Submit feedback and open a source:** demonstrate the real feedback/source-engagement events used by the quality dashboard.
+8. **Review quality signals:** open `/quality` with an administrator account and explain the difference between answer counts, citation presence, evidence grading, and user ratings.
+9. **Show account recovery:** if email delivery is configured in the demo environment, demonstrate verification or password reset.
 
-### 1. Answer from private HR knowledge
+Use non-sensitive sample documents and avoid recording real employee information, credentials, email addresses, or private policy material.
 
-**Question:** “How many annual leave days do employees receive?”
+## Limitations and responsible use
 
-Expected workflow when the policy exists in the knowledge base:
-
-```text
-Route question → Retrieve private HR knowledge → Grade evidence
-→ Generate grounded answer from the internal source
-```
-
-Tavily should not be needed when the private evidence is sufficient.
-
-### 2. Ask a policy question
-
-**Question:** “How many days per week can I work remotely?”
-
-Expected behavior: retrieve the relevant remote-work policy, evaluate its evidence, and answer from the private knowledge base when possible.
-
-### 3. Ask about current public information
-
-**Question:** “What are the latest public holiday rules in Italy?”
-
-Expected workflow when the private HR knowledge base does not contain sufficient evidence:
-
-```text
-Private retrieval → Weak evidence → Tavily search → Grade web evidence
-→ Answer with external information, or return insufficient evidence
-```
-
-External information should be validated before it is treated as company policy.
-
-### 4. Test authentication and email
-
-- Register a new account and receive a verification email.
-- Verify the email and sign in.
-- Request a password reset, open the emailed link, and set a new password.
-- Confirm the app returns to the sign-in form after a successful password reset.
-
----
+- LLM responses can be incorrect even when sources are shown. Review important answers against the original policy.
+- Public web results are not company policy. Apply them only after verifying applicability with an authorised HR representative.
+- Citation presence and source clicks are usage signals; they do not by themselves prove citation correctness or factual grounding.
+- The Answer Quality dashboard reflects recorded system events and submitted feedback. Unrated responses should not be treated as positively or negatively reviewed.
+- Groq rate limits and API availability can affect LLM-backed requests. The application handles provider errors, but provider quota availability remains external to the project.
+- This is a portfolio project and should not be treated as a certified HR, legal, payroll, or compliance system.
 
 ## License
 
-This project is distributed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+This project is distributed under the Apache License 2.0. See [`LICENSE`](LICENSE) for details.
