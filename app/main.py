@@ -47,6 +47,20 @@ def home(request: Request):
     )
 
 
+@app.get("/showcase", response_class=HTMLResponse)
+def public_showcase(request: Request):
+    """Public product showcase with a self-contained, fictional demo workspace."""
+    return templates.TemplateResponse(
+        "showcase.html",
+        {"request": request, "app_name": settings.app_name},
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+        },
+    )
+
+
 @app.get("/share/{token}", response_class=HTMLResponse)
 def shared_conversation_page(request: Request, token: str):
     """Render the standalone read-only page for a shared conversation."""

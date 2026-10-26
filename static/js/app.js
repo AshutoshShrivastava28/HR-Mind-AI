@@ -716,8 +716,10 @@ function addMessage(role, text, source = "", citations = []) {
         summary.textContent = "Hide supporting passages";
         summary.setAttribute("aria-expanded", "true");
       } else if (mode === "single") {
-        summary.textContent = count === 1 ? "View supporting passage" : `View all ${count} supporting passages`;
-        summary.setAttribute("aria-expanded", "false");
+        const activeNumberMatch = activePassageId.match(/-(\d+)$/);
+        const activeNumber = activeNumberMatch ? activeNumberMatch[1] : "";
+        summary.textContent = count === 1 ? "Hide supporting passage" : `Hide passage [${activeNumber}]`;
+        summary.setAttribute("aria-expanded", "true");
       } else {
         summary.textContent = count === 1 ? "View supporting passage" : `View ${count} supporting passages`;
         summary.setAttribute("aria-expanded", "false");
@@ -744,7 +746,10 @@ function addMessage(role, text, source = "", citations = []) {
       event.preventDefault();
       const details = showAllToggle.closest("details.source-passages");
       if (!details) return;
-      syncSourcePassageGroup(details, details.dataset.viewMode === "all" ? "none" : "all");
+      const currentMode = details.dataset.viewMode || "none";
+      // The summary label mirrors the visible state: a selected passage can be hidden,
+      // while the collapsed group can be expanded to show every supporting passage.
+      syncSourcePassageGroup(details, currentMode === "none" ? "all" : "none");
       return;
     }
 

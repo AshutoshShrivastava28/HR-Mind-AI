@@ -5059,3 +5059,26 @@ textarea:focus-visible {
   }
 }
 
+/* Entry point for visitors who want to explore the public showcase first. */
+.auth-showcase-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 14px auto 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(69, 211, 154, 0.24);
+  border-radius: 9px;
+  color: #a4efca;
+  background: rgba(69, 211, 154, 0.045);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+}
+.auth-showcase-link:hover {
+  border-color: rgba(69, 211, 154, 0.5);
+  background: rgba(69, 211, 154, 0.09);
+}
