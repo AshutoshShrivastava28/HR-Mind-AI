@@ -5,6 +5,7 @@ import shutil
 import threading
 import time
 import uuid
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -30,6 +31,10 @@ from app.services.authentication import (
     list_personal_documents,
     update_company_document_vectors,
     update_personal_document_vectors,
+    get_company_policy_metadata,
+    list_company_policy_documents,
+    save_company_policy_metadata,
+    get_company_policy_metadata_map,
     require_admin,
 )
 from app.services.conversations import (
@@ -71,6 +76,14 @@ class GuestChatRequest(BaseModel):
 
 class RenameConversationRequest(BaseModel):
     title: str = Field(min_length=1, max_length=80)
+
+
+class PolicyMetadataUpdate(BaseModel):
+    policy_family: str = Field(default="", max_length=120)
+    version_label: str = Field(default="", max_length=40)
+    policy_status: str = Field(min_length=1, max_length=20)
+    effective_date: str = Field(default="", max_length=10)
+    supersedes_document_id: str | None = Field(default=None, max_length=80)
 
 
 def _markdown_filename(title: str) -> str:
@@ -250,8 +263,13 @@ def _remove_upload_files(destination: Path) -> None:
     )
 
 
-def _reindex_saved_document(record: dict, namespace: str, update_record_vectors) -> dict:
-    """Rebuild the indexed chunks for a stored document with rollback on failure."""
+def _reindex_saved_document(
+    record: dict,
+    namespace: str,
+    update_record_vectors,
+    metadata_overrides: dict | None = None,
+) -> dict:
+    """Rebuild stored chunks; optionally tag them with stable document metadata."""
     upload_root = Path(settings.upload_dir).resolve()
     stored_path = Path(record["storage_path"]).resolve()
 
@@ -262,6 +280,9 @@ def _reindex_saved_document(record: dict, namespace: str, update_record_vectors)
         )
 
     chunks = _load_and_chunk(stored_path)
+    if metadata_overrides:
+        for chunk in chunks:
+            chunk.metadata.update(metadata_overrides)
     old_vector_ids = list(record.get("vector_ids") or [])
     new_vector_ids = [uuid.uuid4().hex for _ in chunks]
     record_updated = False
@@ -841,6 +862,173 @@ def admin_all_documents(request: Request):
     return {"documents": list_all_documents_for_admin()}
 
 
+
+
+# HRMIND_AI_POLICY_LIFECYCLE_V1
+@router.get("/admin/policy-documents")
+def admin_policy_documents(request: Request):
+    """Return company policies and flag ambiguous active-version metadata."""
+    user = get_current_user(request)
+    require_admin(user)
+
+    documents = list_company_policy_documents()
+    active_by_family: dict[str, list[dict]] = {}
+    for doc in documents:
+        family = " ".join(str(doc.get("policy_family") or "").split()).casefold()
+        if family and doc.get("policy_status") == "active":
+            active_by_family.setdefault(family, []).append(doc)
+
+    conflicts = []
+    for family_key, active_docs in active_by_family.items():
+        if len(active_docs) > 1:
+            family_label = next(
+                (str(doc.get("policy_family") or "").strip() for doc in active_docs if doc.get("policy_family")),
+                family_key,
+            )
+            conflicts.append({
+                "policy_family": family_label,
+                "active_count": len(active_docs),
+                "documents": [
+                    {"id": doc["id"], "filename": doc["filename"], "version_label": doc.get("version_label", "")}
+                    for doc in active_docs
+                ],
+                "message": (
+                    f'{len(active_docs)} documents are marked Active for "{family_label}". '
+                    "Confirm the authoritative version or mark older versions Superseded."
+                ),
+            })
+
+    for doc in documents:
+        family_key = " ".join(str(doc.get("policy_family") or "").split()).casefold()
+        doc["has_active_conflict"] = bool(family_key and len(active_by_family.get(family_key, [])) > 1)
+
+    return {"documents": documents, "conflicts": conflicts}
+
+
+@router.put("/admin/policy-documents/{document_id}")
+def update_admin_policy_metadata(
+    document_id: str,
+    payload: PolicyMetadataUpdate,
+    request: Request,
+):
+    """Save lifecycle metadata, re-index vectors, and optionally supersede an older version."""
+    user = get_current_user(request)
+    require_admin(user)
+
+    record = get_company_document(document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Company document not found.")
+
+    family = " ".join(payload.policy_family.strip().split())
+    version = payload.version_label.strip()
+    status = payload.policy_status.strip().lower()
+    effective_date = payload.effective_date.strip()
+    supersedes_id = (payload.supersedes_document_id or "").strip() or None
+
+    if status not in {"draft", "active", "superseded"}:
+        raise HTTPException(status_code=422, detail="Select a valid policy lifecycle status.")
+    if status == "active" and (not family or not version or not effective_date):
+        raise HTTPException(
+            status_code=422,
+            detail="An Active policy requires a policy family, version label, and effective date.",
+        )
+    if effective_date:
+        try:
+            date.fromisoformat(effective_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Effective date must use YYYY-MM-DD.") from None
+
+    superseded_record = None
+    old_superseded_metadata = None
+    if supersedes_id:
+        if status != "active":
+            raise HTTPException(status_code=422, detail="Only an Active policy can supersede another version.")
+        if supersedes_id == document_id:
+            raise HTTPException(status_code=422, detail="A document cannot supersede itself.")
+        superseded_record = get_company_document(supersedes_id)
+        if not superseded_record:
+            raise HTTPException(status_code=404, detail="The selected previous policy version was not found.")
+        old_superseded_metadata = get_company_policy_metadata(supersedes_id)
+        old_family = " ".join(str(old_superseded_metadata.get("policy_family") or "").split()).casefold()
+        if old_family and old_family != family.casefold():
+            raise HTTPException(
+                status_code=422,
+                detail="The superseded document belongs to a different policy family.",
+            )
+        if old_superseded_metadata.get("supersedes_document_id") == document_id:
+            raise HTTPException(status_code=422, detail="This supersession would create a version cycle.")
+
+    new_metadata = {
+        "policy_family": family,
+        "version_label": version,
+        "policy_status": status,
+        "effective_date": effective_date,
+        "supersedes_document_id": supersedes_id,
+    }
+    old_metadata = get_company_policy_metadata(document_id)
+
+    try:
+        save_company_policy_metadata(document_id, new_metadata, user["id"])
+        _reindex_saved_document(
+            record,
+            settings.pinecone_namespace,
+            lambda vector_ids: update_company_document_vectors(document_id, vector_ids),
+            metadata_overrides={
+                "hrmindai_document_id": document_id,
+                "hrmindai_document_kind": "company",
+            },
+        )
+
+        if supersedes_id and superseded_record is not None and old_superseded_metadata is not None:
+            superseded_metadata = {
+                "policy_family": family,
+                "version_label": str(old_superseded_metadata.get("version_label") or ""),
+                "policy_status": "superseded",
+                "effective_date": str(old_superseded_metadata.get("effective_date") or ""),
+                "supersedes_document_id": old_superseded_metadata.get("supersedes_document_id"),
+            }
+            save_company_policy_metadata(supersedes_id, superseded_metadata, user["id"])
+            _reindex_saved_document(
+                superseded_record,
+                settings.pinecone_namespace,
+                lambda vector_ids: update_company_document_vectors(supersedes_id, vector_ids),
+                metadata_overrides={
+                    "hrmindai_document_id": supersedes_id,
+                    "hrmindai_document_kind": "company",
+                },
+            )
+    except Exception as exc:
+        # Restore the metadata decision if vector re-indexing fails. The re-index
+        # helper itself preserves/rolls back the stored vector IDs on failure.
+        try:
+            save_company_policy_metadata(document_id, old_metadata, user["id"])
+            if supersedes_id and old_superseded_metadata is not None:
+                save_company_policy_metadata(supersedes_id, old_superseded_metadata, user["id"])
+        except Exception:
+            logger.exception("Policy metadata rollback failed for document %s", document_id)
+        if isinstance(exc, HTTPException):
+            raise
+        logger.exception("Policy lifecycle update failed for document %s", document_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Policy metadata could not be applied safely. Review server logs before retrying.",
+        ) from None
+
+    logger.info(
+        "Admin updated policy lifecycle: admin_id=%s document_id=%s status=%s family=%s version=%s supersedes=%s",
+        user["id"], document_id, status, family, version, supersedes_id,
+    )
+    return {
+        "saved": True,
+        "document_id": document_id,
+        "policy_status": status,
+        "message": (
+            "Policy metadata saved and vectors refreshed."
+            if not supersedes_id
+            else "New active version saved; the selected previous version was marked Superseded and re-indexed."
+        ),
+    }
+
 @router.delete("/admin/documents/{kind}/{document_id}")
 def admin_delete_any_document(kind: str, document_id: str, request: Request):
     """Delete any company or personal document; administrators only."""
@@ -929,6 +1117,10 @@ def reindex_company_document(document_id: str, request: Request):
         record,
         settings.pinecone_namespace,
         lambda vector_ids: update_company_document_vectors(document_id, vector_ids),
+        metadata_overrides={
+            "hrmindai_document_id": document_id,
+            "hrmindai_document_kind": "company",
+        },
     )
 
 @router.post("/ingest", status_code=201)
@@ -951,6 +1143,11 @@ async def ingest_company_document(
 
     try:
         chunks = _load_and_chunk(destination)
+        for chunk in chunks:
+            chunk.metadata.update({
+                "hrmindai_document_id": document_id,
+                "hrmindai_document_kind": "company",
+            })
         vector_ids = [uuid.uuid4().hex for _ in chunks]
 
         add_documents(

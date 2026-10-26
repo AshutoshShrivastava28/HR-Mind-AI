@@ -71,6 +71,11 @@ const adminDocumentStatusFilter = document.getElementById("adminDocumentStatusFi
 const adminDocumentLibraryStatus = document.getElementById("adminDocumentLibraryStatus");
 const adminDocumentLibraryList = document.getElementById("adminDocumentLibraryList");
 const refreshAdminDocumentsBtn = document.getElementById("refreshAdminDocuments");
+const policyRegistryPanel = document.getElementById("policyLifecyclePanel");
+const policyRegistryStatus = document.getElementById("policyRegistryStatus");
+const policyRegistryWarnings = document.getElementById("policyRegistryWarnings");
+const policyRegistryList = document.getElementById("policyRegistryList");
+const refreshPolicyRegistryBtn = document.getElementById("refreshPolicyRegistry");
 
 const conversationToolbar = document.getElementById("conversationToolbar");
 const exportConversationBtn = document.getElementById("exportConversationBtn");
@@ -103,6 +108,7 @@ let personalDocumentsCache = [];
 let companyDocumentsCache = [];
 let documentLibraryUserId = null;
 let adminAllDocumentsCache = [];
+let policyDocumentsCache = [];
 
 const initialWelcomeMarkup = chat.innerHTML;
 
@@ -1782,6 +1788,179 @@ function renderAdminAllDocuments() {
   }).join("");
 }
 
+
+
+// HRMIND_AI_POLICY_LIFECYCLE_V1
+const POLICY_LIFECYCLE_STATUSES = ["draft", "active", "superseded"];
+
+function policyStatusLabel(status) {
+  const labels = {
+    unreviewed: "Unreviewed",
+    draft: "Draft",
+    active: "Active",
+    superseded: "Superseded",
+  };
+  return labels[status] || "Unreviewed";
+}
+
+function getPolicyConflicts(documents) {
+  const activeByFamily = new Map();
+  documents.forEach((doc) => {
+    const family = String(doc.policy_family || "").trim().replace(/\s+/g, " ");
+    if (!family || doc.policy_status !== "active") return;
+    const key = family.toLocaleLowerCase();
+    if (!activeByFamily.has(key)) activeByFamily.set(key, { label: family, documents: [] });
+    activeByFamily.get(key).documents.push(doc);
+  });
+  return [...activeByFamily.values()].filter((item) => item.documents.length > 1);
+}
+
+function renderPolicyRegistry() {
+  if (!policyRegistryList || !policyRegistryWarnings) return;
+  const conflicts = getPolicyConflicts(policyDocumentsCache);
+  policyRegistryWarnings.innerHTML = conflicts.length
+    ? conflicts.map((conflict) => `
+        <div class="policy-conflict-warning" role="alert">
+          <strong>Potential version conflict · ${escapeHtml(conflict.label)}</strong>
+          <span>${conflict.documents.length} documents are marked Active for this family. Confirm the authoritative version or mark older versions Superseded.</span>
+          <span class="policy-conflict-documents">${conflict.documents.map((doc) => escapeHtml(`${doc.filename}${doc.version_label ? ` · ${doc.version_label}` : ""}`)).join(" · ")}</span>
+        </div>
+      `).join("")
+    : '<div class="policy-no-conflicts"><strong>No metadata conflicts detected.</strong><span>This checks lifecycle metadata only; it does not prove policy text is semantically consistent.</span></div>';
+
+  if (!policyDocumentsCache.length) {
+    policyRegistryList.innerHTML = '<div class="empty">No company documents are available for policy review. Upload a company document first.</div>';
+    return;
+  }
+
+  policyRegistryList.innerHTML = policyDocumentsCache.map((doc) => {
+    const status = ["unreviewed", ...POLICY_LIFECYCLE_STATUSES].includes(doc.policy_status) ? doc.policy_status : "unreviewed";
+    const selectedStatus = POLICY_LIFECYCLE_STATUSES.includes(status) ? status : "";
+    const supersedesOptions = policyDocumentsCache
+      .filter((candidate) => candidate.id !== doc.id)
+      .map((candidate) => {
+        const selected = candidate.id === doc.supersedes_document_id ? " selected" : "";
+        const description = `${candidate.filename}${candidate.version_label ? ` · ${candidate.version_label}` : ""}`;
+        return `<option value="${escapeHtml(candidate.id)}"${selected}>${escapeHtml(description)}</option>`;
+      }).join("");
+    const hasConflict = Boolean(doc.has_active_conflict || conflicts.some((conflict) =>
+      conflict.documents.some((item) => item.id === doc.id)
+    ));
+    return `
+      <article class="policy-review-row" data-policy-document-id="${escapeHtml(doc.id)}">
+        <div class="policy-review-file">
+          <div>
+            <span class="policy-status-pill policy-status-${escapeHtml(status)}">${escapeHtml(policyStatusLabel(status))}</span>
+            ${hasConflict ? '<span class="policy-status-pill policy-status-conflict">Potential conflict</span>' : ""}
+          </div>
+          <strong title="${escapeHtml(doc.filename || "Document")}">${escapeHtml(doc.filename || "Document")}</strong>
+          <span>${escapeHtml(doc.uploader_name || "Unknown uploader")} · ${Number(doc.chunks || 0)} indexed chunks</span>
+        </div>
+        <div class="policy-review-fields">
+          <label>Policy family
+            <input type="text" maxlength="120" data-policy-family value="${escapeHtml(doc.policy_family || "")}" placeholder="e.g. Remote Work" autocomplete="off" />
+          </label>
+          <label>Version
+            <input type="text" maxlength="40" data-policy-version value="${escapeHtml(doc.version_label || "")}" placeholder="e.g. v2.1" autocomplete="off" />
+          </label>
+          <label>Status
+            <select data-policy-status required aria-label="Policy status">
+              <option value="" disabled${selectedStatus ? "" : " selected"}>Select status</option>
+              ${POLICY_LIFECYCLE_STATUSES.map((value) => `<option value="${value}"${value === selectedStatus ? " selected" : ""}>${policyStatusLabel(value)}</option>`).join("")}
+            </select>
+          </label>
+          <label>Effective date
+            <input type="date" data-policy-effective-date value="${escapeHtml(doc.effective_date || "")}" />
+          </label>
+          <label class="policy-supersedes-field">Supersedes previous version
+            <select data-policy-supersedes>
+              <option value="">No previous version selected</option>
+              ${supersedesOptions}
+            </select>
+          </label>
+        </div>
+        <div class="policy-review-actions">
+          <span class="policy-review-hint">Saving re-indexes this document so the assistant can apply its lifecycle status.</span>
+          <button class="kb-refresh-btn policy-save-btn" type="button" data-policy-save="true">Save &amp; re-index</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+async function refreshPolicyRegistry() {
+  if (window.hrmindCurrentUser?.role !== "admin") {
+    if (policyRegistryPanel) policyRegistryPanel.classList.add("hidden");
+    return;
+  }
+  if (policyRegistryStatus) policyRegistryStatus.textContent = "Loading policy metadata…";
+  if (refreshPolicyRegistryBtn) refreshPolicyRegistryBtn.disabled = true;
+  try {
+    const result = await apiRequest("/api/admin/policy-documents");
+    policyDocumentsCache = Array.isArray(result.documents) ? result.documents : [];
+    renderPolicyRegistry();
+    const active = policyDocumentsCache.filter((doc) => doc.policy_status === "active").length;
+    const reviewed = policyDocumentsCache.filter((doc) => doc.policy_status !== "unreviewed").length;
+    const conflictCount = getPolicyConflicts(policyDocumentsCache).length;
+    if (policyRegistryStatus) {
+      policyRegistryStatus.textContent = `${policyDocumentsCache.length} company documents · ${reviewed} lifecycle-reviewed · ${active} active · ${conflictCount} potential family conflict${conflictCount === 1 ? "" : "s"}. Legacy documents are unreviewed until an administrator assigns metadata and re-indexes them.`;
+    }
+  } catch (error) {
+    policyDocumentsCache = [];
+    if (policyRegistryList) policyRegistryList.innerHTML = `<div class="empty">Could not load policy registry: ${escapeHtml(error.message || "Please try again.")}</div>`;
+    if (policyRegistryStatus) policyRegistryStatus.textContent = "Policy registry could not be loaded.";
+  } finally {
+    if (refreshPolicyRegistryBtn) refreshPolicyRegistryBtn.disabled = false;
+  }
+}
+
+async function savePolicyMetadata(button) {
+  if (window.hrmindCurrentUser?.role !== "admin") return;
+  const row = button.closest("[data-policy-document-id]");
+  const documentId = row?.dataset.policyDocumentId;
+  if (!documentId) return;
+  const payload = {
+    policy_family: row.querySelector("[data-policy-family]")?.value.trim() || "",
+    version_label: row.querySelector("[data-policy-version]")?.value.trim() || "",
+    policy_status: row.querySelector("[data-policy-status]")?.value || "",
+    effective_date: row.querySelector("[data-policy-effective-date]")?.value || "",
+    supersedes_document_id: row.querySelector("[data-policy-supersedes]")?.value || null,
+  };
+  if (!POLICY_LIFECYCLE_STATUSES.includes(payload.policy_status)) {
+    if (policyRegistryStatus) policyRegistryStatus.textContent = "Choose Draft, Active, or Superseded before saving this policy.";
+    row.querySelector("[data-policy-status]")?.focus();
+    return;
+  }
+  if (payload.policy_status === "active" && (!payload.policy_family || !payload.version_label || !payload.effective_date)) {
+    if (policyRegistryStatus) policyRegistryStatus.textContent = "Active policies require a family, version label, and effective date.";
+    row.querySelector("[data-policy-family]")?.focus();
+    return;
+  }
+  if (payload.supersedes_document_id && payload.policy_status !== "active") {
+    if (policyRegistryStatus) policyRegistryStatus.textContent = "Select Active status before superseding a previous version.";
+    return;
+  }
+
+  const priorLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Saving…";
+  if (policyRegistryStatus) policyRegistryStatus.textContent = "Saving metadata and refreshing searchable vectors…";
+  try {
+    const result = await apiRequest(`/api/admin/policy-documents/${encodeURIComponent(documentId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await refreshPolicyRegistry();
+    await refreshDocuments();
+    if (policyRegistryStatus) policyRegistryStatus.textContent = result.message || "Policy metadata saved.";
+  } catch (error) {
+    if (policyRegistryStatus) policyRegistryStatus.textContent = `Could not save policy metadata: ${error.message || "Please try again."}`;
+    button.disabled = false;
+    button.textContent = priorLabel;
+  }
+}
+
 async function refreshAdminAllDocuments() {
   if (window.hrmindCurrentUser?.role !== "admin") {
     adminAllDocumentsPanel.classList.add("hidden");
@@ -1879,11 +2058,22 @@ openAdminAllDocumentsBtn.addEventListener("click", async () => {
   const willOpen = adminAllDocumentsPanel.classList.contains("hidden");
   adminAllDocumentsPanel.classList.toggle("hidden", !willOpen);
   openAdminAllDocumentsBtn.textContent = willOpen ? "Close All Documents" : "All Documents";
-  if (willOpen) await refreshAdminAllDocuments();
+  if (willOpen) {
+    await refreshAdminAllDocuments();
+    await refreshPolicyRegistry();
+  }
 });
 
-refreshAdminDocumentsBtn.addEventListener("click", () => {
-  refreshAdminAllDocuments();
+refreshAdminDocumentsBtn.addEventListener("click", async () => {
+  await refreshAdminAllDocuments();
+  await refreshPolicyRegistry();
+});
+refreshPolicyRegistryBtn?.addEventListener("click", refreshPolicyRegistry);
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-policy-save]");
+  if (!button) return;
+  event.preventDefault();
+  await savePolicyMetadata(button);
 });
 adminDocumentSearchInput.addEventListener("input", renderAdminAllDocuments);
 adminDocumentStatusFilter.addEventListener("change", renderAdminAllDocuments);

@@ -168,8 +168,9 @@ def get_vectorstore(namespace: str | None = None):
     return _vectorstores[ns]
 
 
-def get_retriever(namespace: str | None = None):
-    return get_vectorstore(namespace).as_retriever(search_kwargs={"k": settings.top_k})
+def get_retriever(namespace: str | None = None, k: int | None = None):
+    candidate_count = settings.top_k if k is None else max(1, int(k))
+    return get_vectorstore(namespace).as_retriever(search_kwargs={"k": candidate_count})
 
 
 def add_documents(

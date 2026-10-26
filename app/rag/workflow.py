@@ -8,6 +8,8 @@ from langgraph.graph import END, START, StateGraph
 from app.core.config import get_settings
 from app.rag.state import AgentState, EvidenceGrade, RouteDecision
 from app.rag.vectorstore import get_retriever
+from app.rag.policy_lifecycle import filter_company_policy_candidates
+from app.services.authentication import get_company_policy_metadata_map
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -58,6 +60,17 @@ def _kb_citation(doc, index: int) -> dict:
         "type": "private_kb",
         "excerpt": _excerpt(getattr(doc, "page_content", "")),
     }
+
+    if metadata.get("hrmindai_document_kind") == "company":
+        citation.update({
+            "policy_status": str(metadata.get("hrmindai_policy_status") or "unreviewed"),
+            "policy_family": str(metadata.get("hrmindai_policy_family") or ""),
+            "version_label": str(metadata.get("hrmindai_version_label") or ""),
+            "effective_date": str(metadata.get("hrmindai_effective_date") or ""),
+        })
+        if metadata.get("hrmindai_policy_conflict"):
+            citation["policy_conflict"] = True
+            citation["policy_conflict_summary"] = str(metadata.get("hrmindai_policy_conflict_summary") or "Multiple Active versions exist for this policy family; HR confirmation is required.")
 
     page = _source_page(metadata)
 
@@ -140,25 +153,41 @@ def route_after_router(
 
 
 def retrieve_kb(state: AgentState):
-    # Shared company documents are available to all authenticated users.
-    docs = get_retriever(settings.pinecone_namespace).invoke(state["current_query"])
+    # Over-fetch to reduce the chance that old/draft chunks crowd approved policies out of
+    # the candidate set before lifecycle filtering.
+    candidate_count = max(settings.top_k * 8, 40)
+    company_candidates = get_retriever(
+        settings.pinecone_namespace,
+        k=candidate_count,
+    ).invoke(state["current_query"])
+    policy_map = get_company_policy_metadata_map()
+    company_docs, lifecycle_stats = filter_company_policy_candidates(
+        company_candidates,
+        policy_map,
+        limit=max(settings.top_k, 1),
+    )
+    docs = list(company_docs)
 
     # Only retrieve private documents from the current user's namespace.
     user_id = state.get("user_id")
-
     if user_id:
         private_namespace = f"user-{user_id}"
-
         personal_docs = get_retriever(private_namespace).invoke(state["current_query"])
+        docs.extend(personal_docs)
 
-        docs = list(docs) + list(personal_docs)
-
+    trace_message = f"Company and personal KB retrieval → {len(docs)} chunks"
+    excluded_stale = lifecycle_stats["excluded_draft_or_superseded"]
+    excluded_family = lifecycle_stats["excluded_by_active_family"]
+    if excluded_stale:
+        trace_message += f"; excluded {excluded_stale} Draft/Superseded company chunks"
+    if excluded_family:
+        trace_message += f"; excluded {excluded_family} non-Active chunks from families with an Active version"
+    conflict_families = lifecycle_stats["retrieved_conflict_families"]
+    if conflict_families:
+        trace_message += "; policy metadata ambiguity: " + ", ".join(conflict_families)
     return {
         "kb_docs": docs,
-        "trace": add_trace(
-            state,
-            f"Company and personal KB retrieval → {len(docs)} chunks",
-        ),
+        "trace": add_trace(state, trace_message),
     }
 
 
@@ -389,9 +418,24 @@ def generate_from_kb(state: AgentState):
     for citation, doc in zip(citations, docs):
         page = f", page {citation['page']}" if citation.get("page") is not None else ""
 
+        policy_context = ""
+        if citation.get("policy_status"):
+            policy_context = (
+                f"Policy lifecycle: status={citation['policy_status']}; "
+                f"family={citation.get('policy_family') or 'unspecified'}; "
+                f"version={citation.get('version_label') or 'unspecified'}; "
+                f"effective_date={citation.get('effective_date') or 'unspecified'}\n"
+            )
+        if citation.get("policy_conflict"):
+            policy_context += (
+                "POLICY VERSION AMBIGUITY: "
+                + str(citation.get("policy_conflict_summary") or "Multiple Active versions exist for this family.")
+                + " Do not present one version as authoritative. Explicitly say that HR must confirm the current policy.\n"
+            )
         context_parts.append(
             f"[{citation['id']}] Source: "
             f"{citation['title']}{page}\n"
+            f"{policy_context}"
             f"Excerpt: {getattr(doc, 'page_content', '')}"
         )
 
@@ -413,6 +457,10 @@ CITATION RULES:
 - Use multiple labels such as [1][2] when appropriate.
 - Never invent a source label.
 - If a detail is not supported, say it is not specified.
+- Treat ACTIVE as administrator-designated current policy; UNREVIEWED means the source has not yet been lifecycle-reviewed. Never present an Unreviewed source as an approved policy.
+- When a family has exactly one Active version, use that Active version as the authoritative policy and exclude non-Active versions in that family from retrieval.
+- When multiple versions in the same family are marked Active, treat the answer as ambiguous even if vector retrieval returned only one of them; explicitly flag the ambiguity, do not choose a version, and ask the user to confirm with HR. Use the conflict details supplied in the retrieved context. Never choose authority based on upload date alone.
+- Draft and Superseded company documents are excluded from normal retrieval after they have been re-indexed with document IDs. Legacy vectors without document IDs remain searchable as Unreviewed until reviewed.
 - Do not include a separate bibliography in the answer.
   The application displays the source cards separately.
 

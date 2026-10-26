@@ -136,6 +136,27 @@ def init_auth_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_personal_docs_user
             ON personal_documents(user_id, created_at)
         """)
+        # HRMIND_AI_POLICY_LIFECYCLE_V1: policy metadata is separate from the
+        # original upload records so existing databases migrate without a rebuild.
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS company_policy_metadata (
+                document_id TEXT PRIMARY KEY,
+                policy_family TEXT NOT NULL DEFAULT '',
+                version_label TEXT NOT NULL DEFAULT '',
+                policy_status TEXT NOT NULL DEFAULT 'unreviewed'
+                    CHECK (policy_status IN ('unreviewed', 'draft', 'active', 'superseded')),
+                effective_date TEXT NOT NULL DEFAULT '',
+                supersedes_document_id TEXT,
+                reviewed_by TEXT,
+                reviewed_at TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(document_id) REFERENCES company_documents(id) ON DELETE CASCADE
+            )
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_company_policy_family_status
+            ON company_policy_metadata(policy_family, policy_status)
+        """)
 
         now = _iso()
 
@@ -772,6 +793,134 @@ def get_personal_document_for_admin(doc_id: str) -> dict | None:
         vector_ids = []
     result["vector_ids"] = vector_ids if isinstance(vector_ids, list) else []
     return result
+
+
+
+# HRMIND_AI_POLICY_LIFECYCLE_V1
+POLICY_STATUSES = {"unreviewed", "draft", "active", "superseded"}
+
+
+def _empty_policy_metadata(document_id: str) -> dict:
+    return {
+        "document_id": document_id,
+        "policy_family": "",
+        "version_label": "",
+        "policy_status": "unreviewed",
+        "effective_date": "",
+        "supersedes_document_id": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+
+
+def get_company_policy_metadata(document_id: str) -> dict:
+    """Return lifecycle metadata, defaulting legacy uploads to unreviewed."""
+    with auth_connection() as db:
+        row = db.execute(
+            "SELECT * FROM company_policy_metadata WHERE document_id = ?",
+            (document_id,),
+        ).fetchone()
+    if not row:
+        return _empty_policy_metadata(document_id)
+    result = dict(row)
+    result.setdefault("policy_status", "unreviewed")
+    return result
+
+
+def save_company_policy_metadata(document_id: str, metadata: dict, reviewed_by: str) -> dict:
+    """Save administrator-reviewed policy metadata for a company document."""
+    status = str(metadata.get("policy_status") or "unreviewed").strip().lower()
+    if status not in POLICY_STATUSES:
+        raise ValueError("Unsupported policy status.")
+    with auth_connection() as db:
+        exists = db.execute(
+            "SELECT 1 FROM company_documents WHERE id = ?",
+            (document_id,),
+        ).fetchone()
+        if not exists:
+            raise ValueError("Company document not found.")
+        now = _iso()
+        db.execute(
+            """
+            INSERT INTO company_policy_metadata (
+                document_id, policy_family, version_label, policy_status,
+                effective_date, supersedes_document_id, reviewed_by,
+                reviewed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(document_id) DO UPDATE SET
+                policy_family = excluded.policy_family,
+                version_label = excluded.version_label,
+                policy_status = excluded.policy_status,
+                effective_date = excluded.effective_date,
+                supersedes_document_id = excluded.supersedes_document_id,
+                reviewed_by = excluded.reviewed_by,
+                reviewed_at = excluded.reviewed_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                document_id,
+                str(metadata.get("policy_family") or "").strip(),
+                str(metadata.get("version_label") or "").strip(),
+                status,
+                str(metadata.get("effective_date") or "").strip(),
+                metadata.get("supersedes_document_id") or None,
+                reviewed_by,
+                now,
+                now,
+            ),
+        )
+    return get_company_policy_metadata(document_id)
+
+
+def list_company_policy_documents() -> list[dict]:
+    """List shared company documents and policy lifecycle metadata for admins."""
+    with auth_connection() as db:
+        rows = db.execute(
+            """
+            SELECT d.id, d.filename, d.size_bytes, d.uploaded_by AS uploader_id,
+                   u.display_name AS uploader_name, u.email AS uploader_email,
+                   d.created_at, d.vector_ids_json,
+                   COALESCE(m.policy_family, '') AS policy_family,
+                   COALESCE(m.version_label, '') AS version_label,
+                   COALESCE(m.policy_status, 'unreviewed') AS policy_status,
+                   COALESCE(m.effective_date, '') AS effective_date,
+                   m.supersedes_document_id, m.reviewed_by, m.reviewed_at,
+                   m.updated_at AS policy_updated_at
+            FROM company_documents AS d
+            JOIN users AS u ON u.id = d.uploaded_by
+            LEFT JOIN company_policy_metadata AS m ON m.document_id = d.id
+            ORDER BY d.created_at DESC
+            """
+        ).fetchall()
+    documents = []
+    for row in rows:
+        item = dict(row)
+        try:
+            vector_ids = json.loads(item.pop("vector_ids_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            vector_ids = []
+        item["chunks"] = len(vector_ids) if isinstance(vector_ids, list) else 0
+        item["kind"] = "company"
+        documents.append(item)
+    return documents
+
+
+def get_company_policy_metadata_map() -> dict[str, dict]:
+    """Return policy status by document ID for live retrieval filtering."""
+    with auth_connection() as db:
+        rows = db.execute(
+            """
+            SELECT d.id AS document_id, d.filename,
+                   COALESCE(m.policy_family, '') AS policy_family,
+                   COALESCE(m.version_label, '') AS version_label,
+                   COALESCE(m.policy_status, 'unreviewed') AS policy_status,
+                   COALESCE(m.effective_date, '') AS effective_date,
+                   m.supersedes_document_id
+            FROM company_documents AS d
+            LEFT JOIN company_policy_metadata AS m ON m.document_id = d.id
+            """
+        ).fetchall()
+    return {row["document_id"]: dict(row) for row in rows}
 
 def claim_legacy_conversations(
     legacy_owner_id: str | None,

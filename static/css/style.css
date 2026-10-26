@@ -5082,3 +5082,304 @@ textarea:focus-visible {
   border-color: rgba(69, 211, 154, 0.5);
   background: rgba(69, 211, 154, 0.09);
 }
+
+
+/* HRMIND_AI_POLICY_LIFECYCLE_V1 — policy version review */
+.policy-lifecycle-panel {
+  display: grid;
+  gap: 13px;
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border, #24303e);
+}
+.policy-lifecycle-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.policy-lifecycle-header h4 {
+  margin: 3px 0 7px;
+  color: var(--text, #edf3f8);
+  font-size: 16px;
+  line-height: 1.4;
+}
+.policy-lifecycle-header .kb-manager-subtitle {
+  max-width: 68ch;
+}
+.policy-registry-warnings {
+  display: grid;
+  gap: 8px;
+}
+.policy-conflict-warning,
+.policy-no-conflicts {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid #76572e;
+  border-radius: 10px;
+  background: rgba(186, 128, 41, 0.08);
+  color: #f2ce91;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.policy-conflict-warning strong {
+  color: #ffdca6;
+  font-size: 12px;
+}
+.policy-conflict-documents {
+  color: #c9ad7b;
+  overflow-wrap: anywhere;
+}
+.policy-no-conflicts {
+  border-color: #2d6550;
+  background: rgba(56, 176, 119, 0.06);
+  color: #9dbfae;
+}
+.policy-no-conflicts strong {
+  color: #91e6bc;
+}
+.policy-registry-list {
+  display: grid;
+  gap: 11px;
+  min-width: 0;
+}
+.policy-review-row {
+  display: grid;
+  gap: 13px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #2a3b4b;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(14, 23, 33, 0.94), rgba(10, 17, 25, 0.94));
+}
+.policy-review-file {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.policy-review-file > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.policy-review-file > strong {
+  color: var(--text, #edf3f8);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.policy-review-file > span {
+  color: var(--muted, #8796a8);
+  font-size: 10px;
+}
+.policy-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 4px 8px;
+  border: 1px solid #35485a;
+  border-radius: 999px;
+  color: #b7c8d8;
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1;
+}
+.policy-status-active {
+  border-color: #2d6550;
+  background: rgba(56, 176, 119, 0.09);
+  color: #91e6bc;
+}
+.policy-status-draft {
+  border-color: #66562e;
+  background: rgba(186, 145, 41, 0.08);
+  color: #f0d18c;
+}
+.policy-status-superseded {
+  border-color: #4b5360;
+  background: rgba(118, 130, 146, 0.08);
+  color: #aab7c6;
+}
+.policy-status-conflict {
+  border-color: #76572e;
+  background: rgba(186, 128, 41, 0.08);
+  color: #f2ce91;
+}
+.policy-review-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(110px, 0.65fr) minmax(130px, 0.75fr) minmax(140px, 0.8fr);
+  gap: 11px;
+  align-items: end;
+  min-width: 0;
+}
+.policy-review-fields label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-soft, #c2ceda);
+  font-size: 10px;
+  font-weight: 650;
+}
+.policy-review-fields input,
+.policy-review-fields select {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #304457;
+  border-radius: 8px;
+  background: #0a1119;
+  color: var(--text, #edf3f8);
+  font: inherit;
+  font-weight: 500;
+}
+.policy-review-fields input:focus-visible,
+.policy-review-fields select:focus-visible {
+  outline: 2px solid var(--green, #45d39a);
+  outline-offset: 2px;
+}
+.policy-review-fields .policy-supersedes-field {
+  grid-column: 1 / -1;
+}
+.policy-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border-soft, #1a2430);
+}
+.policy-review-hint {
+  color: var(--muted, #8796a8);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.policy-save-btn {
+  flex: 0 0 auto;
+  min-height: 36px;
+}
+.policy-save-btn:disabled,
+#refreshPolicyRegistry:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+@media (max-width: 720px) {
+  .policy-lifecycle-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .policy-lifecycle-header .kb-refresh-btn {
+    align-self: flex-start;
+  }
+  .policy-review-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .policy-review-fields .policy-supersedes-field {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 440px) {
+  .policy-review-row {
+    padding: 12px;
+  }
+  .policy-review-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .policy-review-fields .policy-supersedes-field {
+    grid-column: auto;
+  }
+  .policy-review-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .policy-save-btn {
+    width: 100%;
+  }
+}
+
+/* HRMIND_AI_POLICY_LIFECYCLE_UI_V2 */
+/* Form layout responds to the policy card's width, not just the screen width. */
+.policy-review-row {
+  container-type: inline-size;
+  gap: 18px;
+  padding: clamp(14px, 2.2vw, 22px);
+}
+.policy-review-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px 18px;
+  min-width: 0;
+}
+.policy-review-fields label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  line-height: 1.35;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.policy-review-fields input,
+.policy-review-fields select {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 12px;
+  line-height: 1.35;
+  font-size: 12px;
+}
+.policy-review-fields .policy-supersedes-field {
+  grid-column: 1 / -1;
+}
+.policy-review-actions {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+}
+.policy-review-hint {
+  flex: 1 1 240px;
+  max-width: 66ch;
+}
+.policy-save-btn {
+  min-width: 132px;
+}
+.policy-lifecycle-header {
+  align-items: flex-start;
+}
+.policy-lifecycle-header > div {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.policy-lifecycle-panel,
+.policy-registry-list,
+.policy-review-row {
+  min-width: 0;
+}
+@container (max-width: 540px) {
+  .policy-review-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 13px;
+  }
+  .policy-review-fields .policy-supersedes-field {
+    grid-column: auto;
+  }
+  .policy-review-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .policy-review-hint {
+    flex-basis: auto;
+  }
+  .policy-save-btn {
+    width: 100%;
+  }
+}
