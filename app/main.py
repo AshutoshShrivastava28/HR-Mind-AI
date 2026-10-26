@@ -61,6 +61,19 @@ def public_showcase(request: Request):
     )
 
 
+@app.get("/documents", response_class=HTMLResponse)
+def document_management_page(request: Request):
+    """Render the dedicated authenticated document-management workspace."""
+    return templates.TemplateResponse(
+        "documents.html",
+        {"request": request, "app_name": settings.app_name},
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+        },
+    )
+
 @app.get("/share/{token}", response_class=HTMLResponse)
 def shared_conversation_page(request: Request, token: str):
     """Render the standalone read-only page for a shared conversation."""

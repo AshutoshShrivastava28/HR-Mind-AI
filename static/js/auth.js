@@ -147,6 +147,11 @@
   }
 
   function enterApp(user) {
+    const requestedNext = new URLSearchParams(window.location.search).get("next");
+    if (requestedNext === "/documents" && window.location.pathname !== "/documents") {
+      window.location.replace("/documents");
+      return;
+    }
     window.hrmindCurrentUser = user;
 
     authScreen.classList.add("hidden");
@@ -179,6 +184,7 @@
 
     document.getElementById("openUpload").classList.toggle("hidden", isGuest);
     document.getElementById("openUploadMobile").classList.toggle("hidden", isGuest);
+    document.getElementById("manageDocumentsBtn")?.classList.toggle("hidden", isGuest);
 
     document
       .getElementById("historyToggle")

@@ -2317,6 +2317,12 @@ async function initializeApp() {
     console.error("Could not load documents:", error);
   }
 
+  // HRMIND_AI_DOCUMENT_PAGE_ADD_HASH
+  if (window.location.hash === "#add-document") {
+    history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    await openUploadDialog();
+  }
+
   updateConversationToolbar();
 }
 

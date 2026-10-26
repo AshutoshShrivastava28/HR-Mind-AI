@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b1118" />
+  <title>Document Management | HR Mind AI</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=documents-workspace-20261026" />
+</head>
+<body class="documents-page">
+  <header class="documents-topbar">
+    <a class="documents-brand" href="/" aria-label="HR Mind AI assistant home">
+      <span class="documents-brand-mark">H</span>
+      <span>HR Mind AI</span>
+    </a>
+    <nav class="documents-top-actions" aria-label="Document workspace actions">
+      <a class="documents-top-link" href="/">Back to assistant</a>
+      <a class="documents-primary-link" href="/#add-document">+ Add Document</a>
+    </nav>
+  </header>
+
+  <main class="documents-shell">
+    <section class="documents-hero">
+      <div class="documents-hero-copy">
+        <p class="documents-eyebrow">KNOWLEDGE OPERATIONS</p>
+        <h1>Document Management</h1>
+        <p>Manage the files that power HR Mind AI. Search your library, refresh or rebuild indexing, review company policy versions, and see where the knowledge base needs attention.</p>
+      </div>
+      <div class="documents-hero-side">
+        <span class="documents-role-pill" id="documentsRole">Checking access…</span>
+        <p>Changes to a document's index affect the evidence available to the assistant. Review the source file and its access scope before deleting or re-indexing.</p>
+      </div>
+    </section>
+
+    <section class="documents-stats" aria-label="Knowledge base summary">
+      <article class="documents-stat-card"><span>Total documents</span><strong id="dmStatTotal">—</strong><small>In the libraries available to you</small></article>
+      <article class="documents-stat-card"><span>Indexed</span><strong id="dmStatIndexed">—</strong><small>With searchable chunks</small></article>
+      <article class="documents-stat-card"><span>Searchable chunks</span><strong id="dmStatChunks">—</strong><small>Content passages available to retrieval</small></article>
+      <article class="documents-stat-card"><span>Needs attention</span><strong id="dmStatAttention">—</strong><small>Documents without searchable chunks</small></article>
+    </section>
+
+    <section class="documents-feature-strip" aria-label="Document management capabilities">
+      <div><span class="documents-feature-icon" aria-hidden="true">⌕</span><div><strong>Find quickly</strong><p>Search by filename, owner, or indexing status.</p></div></div>
+      <div><span class="documents-feature-icon" aria-hidden="true">↻</span><div><strong>Maintain the index</strong><p>Refresh metadata or re-index a stored source file.</p></div></div>
+      <div id="dmPolicyFeature" class="hidden"><span class="documents-feature-icon" aria-hidden="true">✓</span><div><strong>Govern policy versions</strong><p>Set lifecycle metadata and catch ambiguous active versions.</p></div></div>
+    </section>
+
+    <section class="documents-workspace" aria-labelledby="dmWorkspaceTitle">
+      <div class="documents-workspace-heading">
+        <div><p class="documents-eyebrow">YOUR WORKSPACE</p><h2 id="dmWorkspaceTitle">Knowledge libraries</h2></div>
+        <p id="dmGlobalStatus" class="documents-global-status" role="status" aria-live="polite">Loading your document libraries…</p>
+      </div>
+
+      <nav class="documents-tabs" aria-label="Document libraries">
+        <button class="documents-tab active" type="button" data-dm-view="mine" aria-selected="true">My documents</button>
+        <button class="documents-tab hidden" type="button" data-dm-view="company" aria-selected="false">Company library</button>
+        <button class="documents-tab hidden" type="button" data-dm-view="all" aria-selected="false">All documents <span class="documents-admin-tag">ADMIN</span></button>
+        <button class="documents-tab hidden" type="button" data-dm-view="policies" aria-selected="false">Policy lifecycle <span class="documents-admin-tag">ADMIN</span></button>
+      </nav>
+
+      <section class="documents-view" id="dmViewMine" data-dm-panel="mine" aria-labelledby="dmMineTitle">
+        <div class="documents-view-heading"><div><h3 id="dmMineTitle">My documents</h3><p>Private documents uploaded to your account.</p></div><button id="dmRefreshMine" class="documents-outline-button" type="button">Refresh library</button></div>
+        <div class="documents-toolbar">
+          <label>Search documents<input id="dmMineSearch" type="search" placeholder="Search by filename" autocomplete="off" /></label>
+          <label>Index status<select id="dmMineStatus"><option value="all">All statuses</option><option value="indexed">Indexed</option><option value="attention">Needs attention</option></select></label>
+        </div>
+        <p id="dmMineStatusLine" class="documents-status-line" role="status" aria-live="polite"></p>
+        <div id="dmMineList" class="documents-list"><div class="documents-empty">Loading your documents…</div></div>
+      </section>
+
+      <section class="documents-view hidden" id="dmViewCompany" data-dm-panel="company" aria-labelledby="dmCompanyTitle">
+        <div class="documents-view-heading"><div><h3 id="dmCompanyTitle">Company knowledge base</h3><p>Shared HR knowledge used by the organization. Only administrators can manage these files.</p></div><button id="dmRefreshCompany" class="documents-outline-button" type="button">Refresh library</button></div>
+        <div class="documents-toolbar"><label>Search company documents<input id="dmCompanySearch" type="search" placeholder="Search by filename" autocomplete="off" /></label><label>Index status<select id="dmCompanyStatus"><option value="all">All statuses</option><option value="indexed">Indexed</option><option value="attention">Needs attention</option></select></label></div>
+        <p id="dmCompanyStatusLine" class="documents-status-line" role="status" aria-live="polite"></p>
+        <div id="dmCompanyList" class="documents-list"><div class="documents-empty">Loading company documents…</div></div>
+      </section>
+
+      <section class="documents-view hidden" id="dmViewAll" data-dm-panel="all" aria-labelledby="dmAllTitle">
+        <div class="documents-view-heading"><div><h3 id="dmAllTitle">All documents</h3><p>Administrator inventory across company files and all users' private uploads. Deletion is permanent.</p></div><button id="dmRefreshAll" class="documents-outline-button" type="button">Refresh all</button></div>
+        <div class="documents-toolbar"><label>Search every document<input id="dmAllSearch" type="search" placeholder="Filename, uploader, or email" autocomplete="off" /></label><label>Index status<select id="dmAllStatus"><option value="all">All statuses</option><option value="indexed">Indexed</option><option value="attention">Needs attention</option></select></label></div>
+        <p id="dmAllStatusLine" class="documents-status-line" role="status" aria-live="polite"></p>
+        <div id="dmAllList" class="documents-list"><div class="documents-empty">Loading administrator inventory…</div></div>
+      </section>
+
+      <section class="documents-view hidden" id="dmViewPolicies" data-dm-panel="policies" aria-labelledby="dmPoliciesTitle">
+        <div class="documents-view-heading"><div><h3 id="dmPoliciesTitle">Policy lifecycle &amp; version review</h3><p>Assign the policy family, version, approved status and effective date for shared company policies. Status choices are Draft, Active and Superseded.</p></div><button id="dmRefreshPolicies" class="documents-outline-button" type="button">Refresh policies</button></div>
+        <div id="dmPolicyWarnings" class="documents-policy-warnings" aria-live="polite"></div>
+        <p id="dmPolicyStatusLine" class="documents-status-line" role="status" aria-live="polite"></p>
+        <div id="dmPolicyList" class="documents-policy-list"><div class="documents-empty">Loading policy metadata…</div></div>
+      </section>
+    </section>
+
+    <footer class="documents-footer"><a href="/">← Return to HR Mind AI</a><span>Document access and management actions are enforced by the server.</span></footer>
+  </main>
+  <script src="/static/js/documents.js?v=documents-workspace-20261026"></script>
+</body>
+</html>
