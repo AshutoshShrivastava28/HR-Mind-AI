@@ -102,6 +102,15 @@ fake_vectorstore.get_retriever = (
     lambda namespace=None: fake_vectorstore.get_retriever_calls.append(namespace)
 )
 
+# Provide the Answer Quality functions imported by app.api.routes.
+# These stubs keep document-route tests independent of the real audit database.
+fake_audit.record_answer_quality_event = lambda **kwargs: kwargs.get("event_id")
+
+fake_audit.submit_answer_feedback = lambda *args, **kwargs: "submitted"
+
+fake_audit.record_source_engagement = lambda *args, **kwargs: True
+
+fake_audit.get_answer_quality_dashboard = lambda *args, **kwargs: {}
 sys.modules["app.services.audit"] = fake_audit
 sys.modules["app.services.ingestion"] = fake_ingestion
 sys.modules["app.rag.vectorstore"] = fake_vectorstore

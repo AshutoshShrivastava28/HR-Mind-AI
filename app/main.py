@@ -74,6 +74,20 @@ def document_management_page(request: Request):
         },
     )
 
+@app.get("/quality", response_class=HTMLResponse)
+def answer_quality_page(request: Request):
+    """Render the admin answer-quality dashboard shell; API access is admin-guarded."""
+    return templates.TemplateResponse(
+        "quality.html",
+        {"request": request, "app_name": settings.app_name},
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+        },
+    )
+
+
 @app.get("/share/{token}", response_class=HTMLResponse)
 def shared_conversation_page(request: Request, token: str):
     """Render the standalone read-only page for a shared conversation."""

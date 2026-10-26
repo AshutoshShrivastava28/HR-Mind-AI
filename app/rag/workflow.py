@@ -6,9 +6,9 @@ from langchain_tavily import TavilySearch
 from langgraph.graph import END, START, StateGraph
 
 from app.core.config import get_settings
+from app.rag.policy_lifecycle import filter_company_policy_candidates
 from app.rag.state import AgentState, EvidenceGrade, RouteDecision
 from app.rag.vectorstore import get_retriever
-from app.rag.policy_lifecycle import filter_company_policy_candidates
 from app.services.authentication import get_company_policy_metadata_map
 
 logger = logging.getLogger(__name__)
@@ -62,15 +62,22 @@ def _kb_citation(doc, index: int) -> dict:
     }
 
     if metadata.get("hrmindai_document_kind") == "company":
-        citation.update({
-            "policy_status": str(metadata.get("hrmindai_policy_status") or "unreviewed"),
-            "policy_family": str(metadata.get("hrmindai_policy_family") or ""),
-            "version_label": str(metadata.get("hrmindai_version_label") or ""),
-            "effective_date": str(metadata.get("hrmindai_effective_date") or ""),
-        })
+        citation.update(
+            {
+                "policy_status": str(
+                    metadata.get("hrmindai_policy_status") or "unreviewed"
+                ),
+                "policy_family": str(metadata.get("hrmindai_policy_family") or ""),
+                "version_label": str(metadata.get("hrmindai_version_label") or ""),
+                "effective_date": str(metadata.get("hrmindai_effective_date") or ""),
+            }
+        )
         if metadata.get("hrmindai_policy_conflict"):
             citation["policy_conflict"] = True
-            citation["policy_conflict_summary"] = str(metadata.get("hrmindai_policy_conflict_summary") or "Multiple Active versions exist for this policy family; HR confirmation is required.")
+            citation["policy_conflict_summary"] = str(
+                metadata.get("hrmindai_policy_conflict_summary")
+                or "Multiple Active versions exist for this policy family; HR confirmation is required."
+            )
 
     page = _source_page(metadata)
 
@@ -123,25 +130,44 @@ def add_trace(state: AgentState, message: str):
 
 
 def route_question(state: AgentState):
-    router = llm().with_structured_output(
-        RouteDecision,
-        method="json_mode",
-    )
+    question = str(state.get("question", "")).strip()
+    normalized = question.casefold().rstrip(" \t\r\n.!?,;:")
 
-    decision = router.invoke(f"""
-You route messages for an enterprise HR policy and employee support assistant.
-Use kb for questions about company HR policies, leave, holidays, benefits, payroll,
-remote work, attendance, onboarding, performance, expenses, travel, conduct, or employee support.
-Use direct only for greetings, thanks, or casual chat that needs no company knowledge.
-Question: {state['question']}
-Return valid JSON like {{"route":"kb"}}.
-""")
+    direct_phrases = {
+        "hi",
+        "hello",
+        "hey",
+        "hiya",
+        "hi there",
+        "hello there",
+        "hey there",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "thanks",
+        "thank you",
+        "thanks a lot",
+        "thank you very much",
+        "ok",
+        "okay",
+        "got it",
+        "understood",
+        "bye",
+        "goodbye",
+        "how are you",
+        "who are you",
+        "what is your name",
+        "what can you do",
+        "what can you help me with",
+    }
+
+    route = "direct" if normalized in direct_phrases else "kb"
 
     return {
-        "source_used": decision.route,
+        "source_used": route,
         "trace": add_trace(
             state,
-            f"Router → {decision.route.upper()}",
+            f"Rule-based router: {route.upper()}",
         ),
     }
 
@@ -429,7 +455,10 @@ def generate_from_kb(state: AgentState):
         if citation.get("policy_conflict"):
             policy_context += (
                 "POLICY VERSION AMBIGUITY: "
-                + str(citation.get("policy_conflict_summary") or "Multiple Active versions exist for this family.")
+                + str(
+                    citation.get("policy_conflict_summary")
+                    or "Multiple Active versions exist for this family."
+                )
                 + " Do not present one version as authoritative. Explicitly say that HR must confirm the current policy.\n"
             )
         context_parts.append(

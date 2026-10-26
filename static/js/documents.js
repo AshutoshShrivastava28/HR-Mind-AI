@@ -324,10 +324,13 @@
       state.user = result.user;
       $("documentsRole").textContent = state.user.role === "admin" ? "Administrator workspace" : "Employee workspace";
       const admin = isAdmin();
+      const qualityDashboardLink = $("answerQualityDashboardLink");
+      if (qualityDashboardLink) qualityDashboardLink.classList.toggle("hidden", !admin);
       ["company", "all", "policies"].forEach((view) => {
         document.querySelector(`[data-dm-view="${view}"]`)?.classList.toggle("hidden", !admin);
       });
       $("dmPolicyFeature").classList.toggle("hidden", !admin);
+      $("documentsQualityLink")?.classList.toggle("hidden", !admin);
       if (!admin) {
         $("dmViewCompany").classList.add("hidden");
         $("dmViewAll").classList.add("hidden");
@@ -348,4 +351,28 @@
   }
 
   initialize();
+
+  /* HRMIND_AI_SINGLE_QUALITY_NAV_V1: keep exactly one quality link even if older code injects one. */
+  function enforceSingleAnswerQualityLink() {
+    const nav = document.querySelector(".documents-top-actions");
+    if (!nav) return;
+    const candidates = Array.from(nav.querySelectorAll("a")).filter((link) => {
+      let path = "";
+      try { path = new URL(link.getAttribute("href") || "", window.location.origin).pathname.replace(/\/+$/, ""); }
+      catch (_) { /* Ignore malformed, unrelated links. */ }
+      return path === "/quality" || String(link.textContent || "").trim().toLowerCase() === "answer quality";
+    });
+    if (!candidates.length) return;
+    const keep = candidates.find((link) => link.id === "answerQualityDashboardLink") || candidates[0];
+    keep.id = "answerQualityDashboardLink";
+    if (keep.getAttribute("href") !== "/quality") keep.setAttribute("href", "/quality");
+    if (String(keep.textContent || "").trim() !== "Answer Quality") keep.textContent = "Answer Quality";
+    for (const link of candidates) if (link !== keep) link.remove();
+  }
+  enforceSingleAnswerQualityLink();
+  const qualityNav = document.querySelector(".documents-top-actions");
+  if (qualityNav && window.MutationObserver) {
+    const qualityNavObserver = new MutationObserver(enforceSingleAnswerQualityLink);
+    qualityNavObserver.observe(qualityNav, { childList: true, subtree: true });
+  }
 })();

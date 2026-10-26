@@ -16,26 +16,32 @@ from starlette.background import BackgroundTask
 from app.core.config import get_settings
 from app.rag.vectorstore import add_documents, delete_vectors
 from app.rag.workflow import agent_graph, answer_guest_question
-from app.services.audit import write_audit
+from app.services.audit import (
+    get_answer_quality_dashboard,
+    record_answer_quality_event,
+    record_source_engagement,
+    submit_answer_feedback,
+    write_audit,
+)
 from app.services.authentication import (
     create_company_document,
     create_personal_document,
     delete_company_document_record,
     delete_personal_document_record,
     get_company_document,
+    get_company_policy_metadata,
+    get_company_policy_metadata_map,
     get_current_user,
     get_personal_document,
+    get_personal_document_for_admin,
     list_all_documents_for_admin,
     list_company_documents,
-    get_personal_document_for_admin,
+    list_company_policy_documents,
     list_personal_documents,
+    require_admin,
+    save_company_policy_metadata,
     update_company_document_vectors,
     update_personal_document_vectors,
-    get_company_policy_metadata,
-    list_company_policy_documents,
-    save_company_policy_metadata,
-    get_company_policy_metadata_map,
-    require_admin,
 )
 from app.services.conversations import (
     create_conversation,
@@ -84,6 +90,11 @@ class PolicyMetadataUpdate(BaseModel):
     policy_status: str = Field(min_length=1, max_length=20)
     effective_date: str = Field(default="", max_length=10)
     supersedes_document_id: str | None = Field(default=None, max_length=80)
+
+
+class AnswerQualityFeedbackRequest(BaseModel):
+    rating: str = Field(min_length=1, max_length=20)
+    reason: str | None = Field(default=None, max_length=40)
 
 
 def _markdown_filename(title: str) -> str:
@@ -299,12 +310,17 @@ def _reindex_saved_document(
             try:
                 update_record_vectors(old_vector_ids)
             except Exception:
-                logger.exception("Could not restore prior vector IDs for document %s", record.get("id"))
+                logger.exception(
+                    "Could not restore prior vector IDs for document %s",
+                    record.get("id"),
+                )
         try:
             if new_vector_ids:
                 delete_vectors(new_vector_ids, namespace=namespace)
         except Exception:
-            logger.exception("Could not remove replacement vectors for document %s", record.get("id"))
+            logger.exception(
+                "Could not remove replacement vectors for document %s", record.get("id")
+            )
         raise HTTPException(
             status_code=503,
             detail="The document could not be re-indexed. Check server logs and try again.",
@@ -317,6 +333,7 @@ def _reindex_saved_document(
         "chunks": len(chunks),
         "index_status": "indexed",
     }
+
 
 @router.get("/health")
 def health():
@@ -749,6 +766,22 @@ def chat(
             trace_items = final_state.get("trace", [])
             citations = final_state.get("citations", [])
 
+            quality_event_id = None
+            try:
+                quality_event_id = uuid.uuid4().hex
+                record_answer_quality_event(
+                    event_id=quality_event_id,
+                    user_id=user["id"],
+                    question=payload.question,
+                    source_used=source_used,
+                    citation_count=len(citations),
+                    kb_grade=final_state.get("kb_grade", ""),
+                    web_grade=final_state.get("web_grade", ""),
+                )
+            except Exception:
+                quality_event_id = None
+                logger.exception("Failed to record answer-quality metadata")
+
             try:
                 write_audit(
                     payload.question,
@@ -791,6 +824,7 @@ def chat(
                     "source_used": source_used,
                     "trace": trace_items,
                     "citations": citations,
+                    "quality_event_id": quality_event_id,
                     "rewritten_query": final_state.get(
                         "current_query",
                         payload.question,
@@ -802,17 +836,36 @@ def chat(
             cancel_event.set()
             raise
 
-        except Exception:
+        except Exception as exc:
             if not cancel_event.is_set():
-                logger.exception("Agent chat request failed")
+                is_rate_limited = (
+                    getattr(exc, "status_code", None) == 429
+                    or type(exc).__name__ == "RateLimitError"
+                )
+
+                if is_rate_limited:
+                    logger.warning(
+                        "AI provider rate limit reached while processing chat"
+                    )
+                    error_code = "rate_limited"
+                    detail = (
+                        "The AI service has temporarily reached its usage "
+                        "limit. Please wait a few minutes before trying again. "
+                        "Your question was not answered."
+                    )
+                else:
+                    logger.exception("Agent chat request failed")
+                    error_code = "agent_error"
+                    detail = (
+                        "The agent could not complete this request. "
+                        "Please try again."
+                    )
 
                 yield json.dumps(
                     {
                         "type": "error",
-                        "detail": (
-                            "The agent could not complete this request. "
-                            "Please try again."
-                        ),
+                        "code": error_code,
+                        "detail": detail,
                     }
                 ) + "\n"
 
@@ -849,6 +902,66 @@ def chat(
     )
 
 
+# HRMIND_AI_ANSWER_QUALITY_V1
+@router.post("/answer-quality/{event_id}/feedback")
+def submit_quality_feedback(
+    event_id: str,
+    payload: AnswerQualityFeedbackRequest,
+    request: Request,
+):
+    """Record a single rating for an answer owned by the signed-in user."""
+    user = get_current_user(request)
+    rating = payload.rating.strip().lower()
+    reason = (payload.reason or "").strip().lower() or None
+    allowed_reasons = {
+        "inaccurate",
+        "missing_context",
+        "citation_issue",
+        "not_relevant",
+        "other",
+    }
+    if rating not in {"helpful", "not_helpful"}:
+        raise HTTPException(
+            status_code=422, detail="Choose Helpful or Needs improvement."
+        )
+    if reason is not None and reason not in allowed_reasons:
+        raise HTTPException(status_code=422, detail="Choose a valid feedback reason.")
+    if rating == "helpful":
+        reason = None
+    result = submit_answer_feedback(event_id, user["id"], rating, reason)
+    if result == "not_found":
+        raise HTTPException(
+            status_code=404, detail="Answer feedback record was not found."
+        )
+    if result == "already_rated":
+        raise HTTPException(
+            status_code=409,
+            detail="Feedback has already been submitted for this answer.",
+        )
+    return {"saved": True, "message": "Thank you. Your feedback has been recorded."}
+
+
+@router.post("/answer-quality/{event_id}/source-engagement")
+def track_answer_source_engagement(event_id: str, request: Request):
+    """Record that the owner opened a citation/source for this answer."""
+    user = get_current_user(request)
+    if not record_source_engagement(event_id, user["id"]):
+        raise HTTPException(
+            status_code=404, detail="Answer source record was not found."
+        )
+    return {"recorded": True}
+
+
+@router.get("/admin/answer-quality")
+def admin_answer_quality_dashboard(request: Request, days: int = 30):
+    """Return aggregate-only answer quality metrics to administrators."""
+    user = get_current_user(request)
+    require_admin(user)
+    if days not in {7, 30, 90}:
+        raise HTTPException(status_code=422, detail="Choose a 7, 30, or 90 day range.")
+    return get_answer_quality_dashboard(days)
+
+
 # ---------------------------------------------------------
 # Company-wide documents: administrators only
 # ---------------------------------------------------------
@@ -860,8 +973,6 @@ def admin_all_documents(request: Request):
     user = get_current_user(request)
     require_admin(user)
     return {"documents": list_all_documents_for_admin()}
-
-
 
 
 # HRMIND_AI_POLICY_LIFECYCLE_V1
@@ -882,25 +993,37 @@ def admin_policy_documents(request: Request):
     for family_key, active_docs in active_by_family.items():
         if len(active_docs) > 1:
             family_label = next(
-                (str(doc.get("policy_family") or "").strip() for doc in active_docs if doc.get("policy_family")),
+                (
+                    str(doc.get("policy_family") or "").strip()
+                    for doc in active_docs
+                    if doc.get("policy_family")
+                ),
                 family_key,
             )
-            conflicts.append({
-                "policy_family": family_label,
-                "active_count": len(active_docs),
-                "documents": [
-                    {"id": doc["id"], "filename": doc["filename"], "version_label": doc.get("version_label", "")}
-                    for doc in active_docs
-                ],
-                "message": (
-                    f'{len(active_docs)} documents are marked Active for "{family_label}". '
-                    "Confirm the authoritative version or mark older versions Superseded."
-                ),
-            })
+            conflicts.append(
+                {
+                    "policy_family": family_label,
+                    "active_count": len(active_docs),
+                    "documents": [
+                        {
+                            "id": doc["id"],
+                            "filename": doc["filename"],
+                            "version_label": doc.get("version_label", ""),
+                        }
+                        for doc in active_docs
+                    ],
+                    "message": (
+                        f'{len(active_docs)} documents are marked Active for "{family_label}". '
+                        "Confirm the authoritative version or mark older versions Superseded."
+                    ),
+                }
+            )
 
     for doc in documents:
         family_key = " ".join(str(doc.get("policy_family") or "").split()).casefold()
-        doc["has_active_conflict"] = bool(family_key and len(active_by_family.get(family_key, [])) > 1)
+        doc["has_active_conflict"] = bool(
+            family_key and len(active_by_family.get(family_key, [])) > 1
+        )
 
     return {"documents": documents, "conflicts": conflicts}
 
@@ -926,7 +1049,9 @@ def update_admin_policy_metadata(
     supersedes_id = (payload.supersedes_document_id or "").strip() or None
 
     if status not in {"draft", "active", "superseded"}:
-        raise HTTPException(status_code=422, detail="Select a valid policy lifecycle status.")
+        raise HTTPException(
+            status_code=422, detail="Select a valid policy lifecycle status."
+        )
     if status == "active" and (not family or not version or not effective_date):
         raise HTTPException(
             status_code=422,
@@ -936,27 +1061,42 @@ def update_admin_policy_metadata(
         try:
             date.fromisoformat(effective_date)
         except ValueError:
-            raise HTTPException(status_code=422, detail="Effective date must use YYYY-MM-DD.") from None
+            raise HTTPException(
+                status_code=422, detail="Effective date must use YYYY-MM-DD."
+            ) from None
 
     superseded_record = None
     old_superseded_metadata = None
     if supersedes_id:
         if status != "active":
-            raise HTTPException(status_code=422, detail="Only an Active policy can supersede another version.")
+            raise HTTPException(
+                status_code=422,
+                detail="Only an Active policy can supersede another version.",
+            )
         if supersedes_id == document_id:
-            raise HTTPException(status_code=422, detail="A document cannot supersede itself.")
+            raise HTTPException(
+                status_code=422, detail="A document cannot supersede itself."
+            )
         superseded_record = get_company_document(supersedes_id)
         if not superseded_record:
-            raise HTTPException(status_code=404, detail="The selected previous policy version was not found.")
+            raise HTTPException(
+                status_code=404,
+                detail="The selected previous policy version was not found.",
+            )
         old_superseded_metadata = get_company_policy_metadata(supersedes_id)
-        old_family = " ".join(str(old_superseded_metadata.get("policy_family") or "").split()).casefold()
+        old_family = " ".join(
+            str(old_superseded_metadata.get("policy_family") or "").split()
+        ).casefold()
         if old_family and old_family != family.casefold():
             raise HTTPException(
                 status_code=422,
                 detail="The superseded document belongs to a different policy family.",
             )
         if old_superseded_metadata.get("supersedes_document_id") == document_id:
-            raise HTTPException(status_code=422, detail="This supersession would create a version cycle.")
+            raise HTTPException(
+                status_code=422,
+                detail="This supersession would create a version cycle.",
+            )
 
     new_metadata = {
         "policy_family": family,
@@ -979,19 +1119,31 @@ def update_admin_policy_metadata(
             },
         )
 
-        if supersedes_id and superseded_record is not None and old_superseded_metadata is not None:
+        if (
+            supersedes_id
+            and superseded_record is not None
+            and old_superseded_metadata is not None
+        ):
             superseded_metadata = {
                 "policy_family": family,
-                "version_label": str(old_superseded_metadata.get("version_label") or ""),
+                "version_label": str(
+                    old_superseded_metadata.get("version_label") or ""
+                ),
                 "policy_status": "superseded",
-                "effective_date": str(old_superseded_metadata.get("effective_date") or ""),
-                "supersedes_document_id": old_superseded_metadata.get("supersedes_document_id"),
+                "effective_date": str(
+                    old_superseded_metadata.get("effective_date") or ""
+                ),
+                "supersedes_document_id": old_superseded_metadata.get(
+                    "supersedes_document_id"
+                ),
             }
             save_company_policy_metadata(supersedes_id, superseded_metadata, user["id"])
             _reindex_saved_document(
                 superseded_record,
                 settings.pinecone_namespace,
-                lambda vector_ids: update_company_document_vectors(supersedes_id, vector_ids),
+                lambda vector_ids: update_company_document_vectors(
+                    supersedes_id, vector_ids
+                ),
                 metadata_overrides={
                     "hrmindai_document_id": supersedes_id,
                     "hrmindai_document_kind": "company",
@@ -1003,9 +1155,13 @@ def update_admin_policy_metadata(
         try:
             save_company_policy_metadata(document_id, old_metadata, user["id"])
             if supersedes_id and old_superseded_metadata is not None:
-                save_company_policy_metadata(supersedes_id, old_superseded_metadata, user["id"])
+                save_company_policy_metadata(
+                    supersedes_id, old_superseded_metadata, user["id"]
+                )
         except Exception:
-            logger.exception("Policy metadata rollback failed for document %s", document_id)
+            logger.exception(
+                "Policy metadata rollback failed for document %s", document_id
+            )
         if isinstance(exc, HTTPException):
             raise
         logger.exception("Policy lifecycle update failed for document %s", document_id)
@@ -1016,7 +1172,12 @@ def update_admin_policy_metadata(
 
     logger.info(
         "Admin updated policy lifecycle: admin_id=%s document_id=%s status=%s family=%s version=%s supersedes=%s",
-        user["id"], document_id, status, family, version, supersedes_id,
+        user["id"],
+        document_id,
+        status,
+        family,
+        version,
+        supersedes_id,
     )
     return {
         "saved": True,
@@ -1028,6 +1189,7 @@ def update_admin_policy_metadata(
             else "New active version saved; the selected previous version was marked Superseded and re-indexed."
         ),
     }
+
 
 @router.delete("/admin/documents/{kind}/{document_id}")
 def admin_delete_any_document(kind: str, document_id: str, request: Request):
@@ -1052,7 +1214,9 @@ def admin_delete_any_document(kind: str, document_id: str, request: Request):
     if not storage_path.is_relative_to(upload_root):
         logger.error(
             "Admin document deletion blocked for unsafe path: admin_id=%s kind=%s document_id=%s",
-            user["id"], kind, document_id,
+            user["id"],
+            kind,
+            document_id,
         )
         raise HTTPException(
             status_code=500,
@@ -1078,7 +1242,9 @@ def admin_delete_any_document(kind: str, document_id: str, request: Request):
     except Exception:
         logger.exception(
             "Admin could not fully delete document: admin_id=%s kind=%s document_id=%s",
-            user["id"], kind, document_id,
+            user["id"],
+            kind,
+            document_id,
         )
         raise HTTPException(
             status_code=503,
@@ -1087,7 +1253,11 @@ def admin_delete_any_document(kind: str, document_id: str, request: Request):
 
     logger.info(
         "Admin deleted document: admin_id=%s kind=%s document_id=%s uploader_id=%s filename=%s",
-        user["id"], kind, document_id, uploader_id, filename,
+        user["id"],
+        kind,
+        document_id,
+        uploader_id,
+        filename,
     )
     return {
         "deleted": True,
@@ -1095,6 +1265,7 @@ def admin_delete_any_document(kind: str, document_id: str, request: Request):
         "kind": kind,
         "filename": filename,
     }
+
 
 @router.get("/documents/company")
 def company_documents(request: Request):
@@ -1123,6 +1294,7 @@ def reindex_company_document(document_id: str, request: Request):
         },
     )
 
+
 @router.post("/ingest", status_code=201)
 async def ingest_company_document(
     request: Request,
@@ -1144,10 +1316,12 @@ async def ingest_company_document(
     try:
         chunks = _load_and_chunk(destination)
         for chunk in chunks:
-            chunk.metadata.update({
-                "hrmindai_document_id": document_id,
-                "hrmindai_document_kind": "company",
-            })
+            chunk.metadata.update(
+                {
+                    "hrmindai_document_id": document_id,
+                    "hrmindai_document_kind": "company",
+                }
+            )
         vector_ids = [uuid.uuid4().hex for _ in chunks]
 
         add_documents(
@@ -1294,6 +1468,7 @@ def reindex_personal_document(document_id: str, request: Request):
             document_id, user["id"], vector_ids
         ),
     )
+
 
 @router.post("/documents/personal", status_code=201)
 async def ingest_personal_document(

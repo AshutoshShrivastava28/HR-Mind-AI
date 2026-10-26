@@ -636,7 +636,52 @@ function renderCitationGroups(items, messageKey) {
   `;
 }
 
-function addMessage(role, text, source = "", citations = []) {
+
+async function submitAnswerQualityFeedback(container, rating, reason = "") {
+  const eventId = container?.dataset.qualityEventId;
+  const status = container?.querySelector(".answer-feedback-status");
+  if (!eventId || !status || container.dataset.submitted === "true") return;
+  const buttons = container.querySelectorAll("button");
+  buttons.forEach((button) => { button.disabled = true; });
+  status.textContent = "Sending feedback…";
+  status.classList.remove("is-error");
+  try {
+    const response = await fetch(`/api/answer-quality/${encodeURIComponent(eventId)}/feedback`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating, reason: reason || null }),
+    });
+    let data = {};
+    try { data = await response.json(); } catch { /* Keep fallback. */ }
+    if (!response.ok) throw new Error(data.detail || `Feedback failed (${response.status}).`);
+    container.dataset.submitted = "true";
+    container.querySelector(".answer-feedback-actions")?.classList.add("hidden");
+    container.querySelector(".answer-feedback-reasons")?.classList.add("hidden");
+    status.textContent = data.message || "Thank you for your feedback.";
+  } catch (error) {
+    status.textContent = error.message || "Could not submit feedback. Please try again.";
+    status.classList.add("is-error");
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+function recordAnswerSourceEngagement(container) {
+  const eventId = container?.dataset.qualityEventId;
+  if (!eventId || container.dataset.sourceEngagementSent === "true") return;
+  container.dataset.sourceEngagementSent = "true";
+  fetch(`/api/answer-quality/${encodeURIComponent(eventId)}/source-engagement`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  }).catch(() => {
+    // Source interaction analytics is best-effort and must not affect chat UX.
+    container.dataset.sourceEngagementSent = "false";
+  });
+}
+
+function addMessage(role, text, source = "", citations = [], qualityEventId = "") {
   const wrap = document.createElement("div");
   const messageKey = ++nextMessageRenderId;
 
@@ -679,12 +724,36 @@ function addMessage(role, text, source = "", citations = []) {
     ? `<div class="answer-source">Source: ${escapeHtml(formatSource(source))}</div>`
     : "";
 
-  wrap.innerHTML = `
+    const feedbackHtml = role === "assistant" && qualityEventId
+    ? `<section class="answer-feedback" data-quality-event-id="${escapeHtml(qualityEventId)}" aria-label="Answer feedback">
+        <span class="answer-feedback-prompt">Was this answer helpful?</span>
+        <div class="answer-feedback-actions">
+          <button type="button" data-answer-feedback="helpful">Helpful</button>
+          <button type="button" data-answer-feedback="not_helpful">Needs improvement</button>
+        </div>
+        <div class="answer-feedback-reasons hidden">
+          <label>What could be improved?
+            <select data-feedback-reason>
+              <option value="">Choose a reason (optional)</option>
+              <option value="inaccurate">Inaccurate or unsupported</option>
+              <option value="missing_context">Missing context</option>
+              <option value="citation_issue">Source or citation issue</option>
+              <option value="not_relevant">Not relevant to the question</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <button type="button" data-feedback-submit>Send feedback</button>
+        </div>
+        <p class="answer-feedback-status" role="status" aria-live="polite"></p>
+      </section>`
+    : "";
+wrap.innerHTML = `
     <div class="avatar" aria-hidden="true">${role === "user" ? "You" : "AI"}</div>
     <div class="bubble">
       ${body}
       ${sourceHtml}
       ${citationsHtml}
+      ${feedbackHtml}
     </div>
   `;
 
@@ -733,9 +802,36 @@ function addMessage(role, text, source = "", citations = []) {
     }
   }
 
-  wrap.addEventListener("click", (event) => {
+  wrap.addEventListener("click", async (event) => {
     const eventElement = event.target instanceof Element ? event.target : event.target?.parentElement;
     if (!eventElement) return;
+
+    const feedbackContainer = wrap.querySelector(".answer-feedback");
+    const ratingButton = eventElement.closest("[data-answer-feedback]");
+    if (ratingButton) {
+      if (!feedbackContainer || feedbackContainer.dataset.submitted === "true") return;
+      const rating = ratingButton.dataset.answerFeedback;
+      if (rating === "helpful") {
+        await submitAnswerQualityFeedback(feedbackContainer, "helpful", "");
+      } else if (rating === "not_helpful") {
+        feedbackContainer.querySelector(".answer-feedback-reasons")?.classList.remove("hidden");
+        feedbackContainer.querySelector("[data-feedback-reason]")?.focus();
+      }
+      return;
+    }
+    const feedbackSubmit = eventElement.closest("[data-feedback-submit]");
+    if (feedbackSubmit) {
+      if (!feedbackContainer || feedbackContainer.dataset.submitted === "true") return;
+      const reason = feedbackContainer.querySelector("[data-feedback-reason]")?.value || "";
+      await submitAnswerQualityFeedback(feedbackContainer, "not_helpful", reason);
+      return;
+    }
+
+    const sourceInteraction = eventElement.closest(
+      'button[data-source-passage-toggle], summary[data-source-passages-toggle], a[href^="#citation-source-"], [data-sources-more]'
+    );
+    if (sourceInteraction && feedbackContainer) recordAnswerSourceEngagement(feedbackContainer);
+
 
     const showMoreButton = eventElement.closest("[data-sources-more]");
     if (showMoreButton) {
@@ -1567,6 +1663,7 @@ async function askAgent(rawQuestion) {
       finalData.answer || "The agent returned an empty answer.",
       finalData.source_used || "",
       finalData.citations || [],
+      finalData.quality_event_id || "",
     );
 
     renderTrace(finalData.trace || streamedTrace, false);

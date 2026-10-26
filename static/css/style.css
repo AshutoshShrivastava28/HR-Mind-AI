@@ -5544,3 +5544,17 @@ a[href="/documents"]:focus,
 a[href="/documents"]:active {
     text-decoration: none !important;
 }
+
+/* HRMIND_AI_ANSWER_QUALITY_V1 */
+.answer-feedback{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-top:18px;padding-top:12px;border-top:1px solid var(--border, #293b4b);color:var(--muted, #91a6ba);font-size:12px}
+.answer-feedback-prompt{font-weight:650;margin-right:3px}
+.answer-feedback-actions{display:flex;gap:7px;flex-wrap:wrap}
+.answer-feedback button{min-height:31px;padding:6px 10px;border:1px solid var(--border, #293b4b);border-radius:8px;background:var(--surface, #111d28);color:var(--text, #dce8f4);font:inherit;font-weight:700;cursor:pointer}
+.answer-feedback button:hover:not(:disabled){border-color:#4a8978;background:#132d2a}
+.answer-feedback button:disabled{opacity:.55;cursor:wait}
+.answer-feedback-reasons{display:flex;align-items:end;gap:8px;flex-wrap:wrap;width:100%;padding-top:4px}
+.answer-feedback-reasons label{display:grid;gap:5px;min-width:min(280px,100%);color:var(--muted, #91a6ba);font-size:11px}
+.answer-feedback-reasons select{min-height:34px;min-width:245px;max-width:100%;padding:7px 9px;border:1px solid var(--border, #293b4b);border-radius:8px;background:var(--surface, #0c151e);color:var(--text, #dce8f4);font:inherit}
+.answer-feedback-status{flex-basis:100%;margin:0;color:#87dfbc;font-size:11px}
+.answer-feedback-status.is-error{color:#ee989e}
+@media(max-width:560px){.answer-feedback{align-items:flex-start}.answer-feedback-prompt{flex-basis:100%}.answer-feedback-actions{width:100%}.answer-feedback-reasons{align-items:stretch;flex-direction:column}.answer-feedback-reasons label,.answer-feedback-reasons select{width:100%;min-width:0}}
