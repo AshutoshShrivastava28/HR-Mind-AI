@@ -24,8 +24,12 @@ from app.services.authentication import (
     get_company_document,
     get_current_user,
     get_personal_document,
+    list_all_documents_for_admin,
     list_company_documents,
+    get_personal_document_for_admin,
     list_personal_documents,
+    update_company_document_vectors,
+    update_personal_document_vectors,
     require_admin,
 )
 from app.services.conversations import (
@@ -245,6 +249,53 @@ def _remove_upload_files(destination: Path) -> None:
         ignore_errors=True,
     )
 
+
+def _reindex_saved_document(record: dict, namespace: str, update_record_vectors) -> dict:
+    """Rebuild the indexed chunks for a stored document with rollback on failure."""
+    upload_root = Path(settings.upload_dir).resolve()
+    stored_path = Path(record["storage_path"]).resolve()
+
+    if not stored_path.is_relative_to(upload_root) or not stored_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="The original uploaded file is missing or unavailable.",
+        )
+
+    chunks = _load_and_chunk(stored_path)
+    old_vector_ids = list(record.get("vector_ids") or [])
+    new_vector_ids = [uuid.uuid4().hex for _ in chunks]
+    record_updated = False
+
+    try:
+        add_documents(chunks, namespace=namespace, ids=new_vector_ids)
+        update_record_vectors(new_vector_ids)
+        record_updated = True
+        if old_vector_ids:
+            delete_vectors(old_vector_ids, namespace=namespace)
+    except Exception:
+        logger.exception("Document re-index failed for document %s", record.get("id"))
+        if record_updated:
+            try:
+                update_record_vectors(old_vector_ids)
+            except Exception:
+                logger.exception("Could not restore prior vector IDs for document %s", record.get("id"))
+        try:
+            if new_vector_ids:
+                delete_vectors(new_vector_ids, namespace=namespace)
+        except Exception:
+            logger.exception("Could not remove replacement vectors for document %s", record.get("id"))
+        raise HTTPException(
+            status_code=503,
+            detail="The document could not be re-indexed. Check server logs and try again.",
+        ) from None
+
+    return {
+        "reindexed": True,
+        "id": record["id"],
+        "file": record["filename"],
+        "chunks": len(chunks),
+        "index_status": "indexed",
+    }
 
 @router.get("/health")
 def health():
@@ -782,6 +833,81 @@ def chat(
 # ---------------------------------------------------------
 
 
+@router.get("/admin/documents")
+def admin_all_documents(request: Request):
+    """Return company and private uploads to authenticated administrators only."""
+    user = get_current_user(request)
+    require_admin(user)
+    return {"documents": list_all_documents_for_admin()}
+
+
+@router.delete("/admin/documents/{kind}/{document_id}")
+def admin_delete_any_document(kind: str, document_id: str, request: Request):
+    """Delete any company or personal document; administrators only."""
+    user = get_current_user(request)
+    require_admin(user)
+
+    if kind == "company":
+        record = get_company_document(document_id)
+        namespace = settings.pinecone_namespace
+    elif kind == "personal":
+        record = get_personal_document_for_admin(document_id)
+        namespace = record.get("namespace") if record else None
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported document type.")
+
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    upload_root = Path(settings.upload_dir).resolve()
+    storage_path = Path(record["storage_path"]).resolve()
+    if not storage_path.is_relative_to(upload_root):
+        logger.error(
+            "Admin document deletion blocked for unsafe path: admin_id=%s kind=%s document_id=%s",
+            user["id"], kind, document_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="The stored document path is outside the upload directory. Deletion was stopped.",
+        )
+
+    filename = record.get("filename", "Document")
+    uploader_id = record.get("uploaded_by") or record.get("user_id")
+    vector_ids = record.get("vector_ids") or []
+
+    try:
+        if vector_ids:
+            delete_vectors(vector_ids, namespace=namespace)
+
+        _remove_upload_files(storage_path)
+
+        if kind == "company":
+            delete_company_document_record(document_id)
+        else:
+            # Reuse the owner-scoped record deletion with the owner ID from
+            # the row fetched only after require_admin() succeeds.
+            delete_personal_document_record(document_id, record["user_id"])
+    except Exception:
+        logger.exception(
+            "Admin could not fully delete document: admin_id=%s kind=%s document_id=%s",
+            user["id"], kind, document_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="The document could not be fully deleted. Check server logs before retrying.",
+        ) from None
+
+    logger.info(
+        "Admin deleted document: admin_id=%s kind=%s document_id=%s uploader_id=%s filename=%s",
+        user["id"], kind, document_id, uploader_id, filename,
+    )
+    return {
+        "deleted": True,
+        "id": document_id,
+        "kind": kind,
+        "filename": filename,
+    }
+
 @router.get("/documents/company")
 def company_documents(request: Request):
     user = get_current_user(request)
@@ -789,6 +915,21 @@ def company_documents(request: Request):
 
     return {"documents": list_company_documents()}
 
+
+@router.post("/documents/company/{document_id}/reindex")
+def reindex_company_document(document_id: str, request: Request):
+    user = get_current_user(request)
+    require_admin(user)
+    record = get_company_document(document_id)
+
+    if not record:
+        raise HTTPException(status_code=404, detail="Company document not found.")
+
+    return _reindex_saved_document(
+        record,
+        settings.pinecone_namespace,
+        lambda vector_ids: update_company_document_vectors(document_id, vector_ids),
+    )
 
 @router.post("/ingest", status_code=201)
 async def ingest_company_document(
@@ -940,6 +1081,22 @@ def personal_documents(request: Request):
 
     return {"documents": list_personal_documents(user["id"])}
 
+
+@router.post("/documents/personal/{document_id}/reindex")
+def reindex_personal_document(document_id: str, request: Request):
+    user = get_current_user(request)
+    record = get_personal_document(document_id, user["id"])
+
+    if not record:
+        raise HTTPException(status_code=404, detail="Private document not found.")
+
+    return _reindex_saved_document(
+        record,
+        record["namespace"],
+        lambda vector_ids: update_personal_document_vectors(
+            document_id, user["id"], vector_ids
+        ),
+    )
 
 @router.post("/documents/personal", status_code=201)
 async def ingest_personal_document(

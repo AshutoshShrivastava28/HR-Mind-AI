@@ -556,13 +556,23 @@ def create_company_document(
 def list_company_documents() -> list[dict]:
     with auth_connection() as db:
         rows = db.execute("""
-            SELECT id, filename, size_bytes, uploaded_by, created_at
+            SELECT id, filename, size_bytes, uploaded_by, created_at, vector_ids_json
             FROM company_documents
             ORDER BY created_at DESC
             """).fetchall()
 
-    return [dict(row) for row in rows]
-
+    documents = []
+    for row in rows:
+        item = dict(row)
+        raw_vector_ids = item.pop("vector_ids_json", "[]")
+        try:
+            vector_ids = json.loads(raw_vector_ids or "[]")
+        except (TypeError, ValueError):
+            vector_ids = []
+        item["chunks"] = len(vector_ids) if isinstance(vector_ids, list) else 0
+        item["index_status"] = "indexed" if item["chunks"] > 0 else "needs_attention"
+        documents.append(item)
+    return documents
 
 def get_company_document(doc_id: str) -> dict | None:
     with auth_connection() as db:
@@ -579,6 +589,15 @@ def get_company_document(doc_id: str) -> dict | None:
 
     return result
 
+
+def update_company_document_vectors(doc_id: str, vector_ids: list[str]) -> None:
+    with auth_connection() as db:
+        result = db.execute(
+            "UPDATE company_documents SET vector_ids_json = ? WHERE id = ?",
+            (json.dumps(vector_ids), doc_id),
+        )
+        if result.rowcount != 1:
+            raise ValueError("Company document record was not updated.")
 
 def delete_company_document_record(doc_id: str) -> None:
     with auth_connection() as db:
@@ -623,7 +642,7 @@ def list_personal_documents(user_id: str) -> list[dict]:
     with auth_connection() as db:
         rows = db.execute(
             """
-            SELECT id, filename, size_bytes, created_at
+            SELECT id, filename, size_bytes, created_at, vector_ids_json
             FROM personal_documents
             WHERE user_id = ?
             ORDER BY created_at DESC
@@ -631,8 +650,18 @@ def list_personal_documents(user_id: str) -> list[dict]:
             (user_id,),
         ).fetchall()
 
-    return [dict(row) for row in rows]
-
+    documents = []
+    for row in rows:
+        item = dict(row)
+        raw_vector_ids = item.pop("vector_ids_json", "[]")
+        try:
+            vector_ids = json.loads(raw_vector_ids or "[]")
+        except (TypeError, ValueError):
+            vector_ids = []
+        item["chunks"] = len(vector_ids) if isinstance(vector_ids, list) else 0
+        item["index_status"] = "indexed" if item["chunks"] > 0 else "needs_attention"
+        documents.append(item)
+    return documents
 
 def get_personal_document(
     doc_id: str,
@@ -657,6 +686,23 @@ def get_personal_document(
     return result
 
 
+def update_personal_document_vectors(
+    doc_id: str,
+    user_id: str,
+    vector_ids: list[str],
+) -> None:
+    with auth_connection() as db:
+        result = db.execute(
+            """
+            UPDATE personal_documents
+            SET vector_ids_json = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (json.dumps(vector_ids), doc_id, user_id),
+        )
+        if result.rowcount != 1:
+            raise ValueError("Private document record was not updated.")
+
 def delete_personal_document_record(
     doc_id: str,
     user_id: str,
@@ -670,6 +716,62 @@ def delete_personal_document_record(
             (doc_id, user_id),
         )
 
+
+def list_all_documents_for_admin() -> list[dict]:
+    """List company and personal documents with uploader metadata for admins."""
+    with auth_connection() as db:
+        rows = db.execute(
+            """
+            SELECT d.id, d.filename, d.size_bytes,
+                   d.uploaded_by AS uploader_id,
+                   u.display_name AS uploader_name, u.email AS uploader_email,
+                   u.role AS uploader_role, d.created_at AS created_at,
+                   'company' AS kind, d.vector_ids_json
+            FROM company_documents AS d
+            JOIN users AS u ON u.id = d.uploaded_by
+            UNION ALL
+            SELECT p.id, p.filename, p.size_bytes, p.user_id AS uploader_id,
+                   u.display_name AS uploader_name, u.email AS uploader_email,
+                   u.role AS uploader_role, p.created_at AS created_at,
+                   'personal' AS kind, p.vector_ids_json
+            FROM personal_documents AS p
+            JOIN users AS u ON u.id = p.user_id
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+
+    documents = []
+    for row in rows:
+        item = dict(row)
+        raw_vector_ids = item.pop("vector_ids_json", "[]")
+        try:
+            vector_ids = json.loads(raw_vector_ids or "[]")
+        except (TypeError, ValueError):
+            vector_ids = []
+        item["chunks"] = len(vector_ids) if isinstance(vector_ids, list) else 0
+        item["index_status"] = "indexed" if item["chunks"] > 0 else "needs_attention"
+        documents.append(item)
+    return documents
+
+
+def get_personal_document_for_admin(doc_id: str) -> dict | None:
+    """Fetch a personal document by ID. Call only after administrator authorization."""
+    with auth_connection() as db:
+        row = db.execute(
+            "SELECT * FROM personal_documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+
+    if not row:
+        return None
+
+    result = dict(row)
+    try:
+        vector_ids = json.loads(result.pop("vector_ids_json", "[]") or "[]")
+    except (TypeError, ValueError):
+        vector_ids = []
+    result["vector_ids"] = vector_ids if isinstance(vector_ids, list) else []
+    return result
 
 def claim_legacy_conversations(
     legacy_owner_id: str | None,
