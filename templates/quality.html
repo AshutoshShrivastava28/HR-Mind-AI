@@ -1,199 +1,384 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0b1118" />
-  <title>Answer Quality | HR Mind AI</title>
-  <link rel="stylesheet" href="/static/css/quality.css?v=answer-quality-20261026" />
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b1118" />
+    <title>Answer Quality | HR Mind AI</title>
+    <link
+      rel="stylesheet"
+      href="/static/css/quality.css?v=answer-quality-20261026"
+    />
 
-<style id="answer-quality-balanced-layout">
-  /* A balanced 2 × 2 layout keeps empty states intentional rather than leaving
+    <style id="answer-quality-balanced-layout">
+      /* A balanced 2 × 2 layout keeps empty states intentional rather than leaving
      a large unused half-row beside the feedback panel. */
-  .qa-rebalanced-grid {
-    display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    align-items: stretch !important;
-    gap: 20px !important;
-    width: 100% !important;
-    max-width: none !important;
-    grid-column: 1 / -1 !important;
-    margin-block: 20px !important;
-  }
-  .qa-rebalanced-grid > .qa-quality-card {
-    grid-column: auto !important;
-    width: auto !important;
-    max-width: none !important;
-    min-width: 0 !important;
-    min-height: 190px;
-    margin: 0 !important;
-    box-sizing: border-box;
-  }
-  .qa-rebalanced-grid > .qa-quality-card[data-qa-card="recent"] {
-    grid-column: auto !important;
-  }
-  .qa-quality-card [class*="empty"],
-  .qa-quality-card [class*="placeholder"] {
-    box-sizing: border-box;
-    min-height: 68px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-  }
-  @media (max-width: 850px) {
-    .qa-rebalanced-grid {
-      grid-template-columns: minmax(0, 1fr) !important;
-      gap: 14px !important;
-    }
-    .qa-rebalanced-grid > .qa-quality-card {
-      min-height: 0;
-    }
-  }
-</style>
-</head>
-<body class="quality-page">
-  <header class="quality-topbar">
-    <a class="quality-brand" href="/" aria-label="HR Mind AI assistant home"><span class="quality-brand-mark">H</span><span>HR Mind AI</span></a>
-    <nav class="quality-top-actions" aria-label="Dashboard navigation">
-      <a href="/documents">Document management</a>
-      <a href="/">Back to assistant</a>
-    </nav>
-  </header>
-  <main class="quality-shell">
-    <section class="quality-hero">
-      <div><p class="quality-eyebrow">PRODUCT INSIGHTS</p><h1>Answer Quality</h1><p class="quality-intro">Understand whether answers help, where citations are used, and which topics need stronger knowledge coverage.</p></div>
-      <div class="quality-hero-controls"><label for="qualityRange">Reporting period</label><select id="qualityRange"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select><button id="qualityRefresh" type="button">Refresh data</button></div>
-    </section>
-    <p id="qualityStatus" class="quality-status" role="status" aria-live="polite">Checking administrator access…</p>
-    <section id="qualityDenied" class="quality-denied hidden" aria-live="polite"><h2>Administrator access required</h2><p>This dashboard contains aggregated product-quality analytics and is available only to administrators.</p><a href="/?next=/quality">Sign in</a></section>
-    <div id="qualityDashboard" class="hidden">
-      <section class="quality-metrics" aria-label="Answer quality metrics">
-        <article class="quality-metric"><span>Answers generated</span><strong id="qTotalAnswers">—</strong><small>Signed-in answers in this period</small></article>
-        <article class="quality-metric"><span>Helpfulness</span><strong id="qHelpfulness">—</strong><small id="qFeedbackResponses">Waiting for feedback</small></article>
-        <article class="quality-metric"><span>Citation coverage</span><strong id="qCitationCoverage">—</strong><small>Of retrieval-based answers</small></article>
-        <article class="quality-metric"><span>Source engagement</span><strong id="qSourceEngagement">—</strong><small id="qSourceEngagementDetail">Citation interactions</small></article>
-        <article class="quality-metric quality-metric-attention"><span>Evidence gaps</span><strong id="qEvidenceGaps">—</strong><small id="qEvidenceGapRate">Of retrieval-based answers</small></article>
-      </section>
-      <section id="qualityInsightsPanel" class="quality-panel quality-insights-panel" aria-labelledby="qualityInsightsTitle">
-        <div class="quality-panel-heading">
-          <div><p class="quality-eyebrow">INTERPRETED SIGNALS</p><h2 id="qualityInsightsTitle">What the data says</h2></div>
-          <span class="quality-muted">Computed from observed activity</span>
+      .qa-rebalanced-grid {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        align-items: stretch !important;
+        gap: 20px !important;
+        width: 100% !important;
+        max-width: none !important;
+        grid-column: 1 / -1 !important;
+        margin-block: 20px !important;
+      }
+      .qa-rebalanced-grid > .qa-quality-card {
+        grid-column: auto !important;
+        width: auto !important;
+        max-width: none !important;
+        min-width: 0 !important;
+        min-height: 190px;
+        margin: 0 !important;
+        box-sizing: border-box;
+      }
+      .qa-rebalanced-grid > .qa-quality-card[data-qa-card="recent"] {
+        grid-column: auto !important;
+      }
+      .qa-quality-card [class*="empty"],
+      .qa-quality-card [class*="placeholder"] {
+        box-sizing: border-box;
+        min-height: 68px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      @media (max-width: 850px) {
+        .qa-rebalanced-grid {
+          grid-template-columns: minmax(0, 1fr) !important;
+          gap: 14px !important;
+        }
+        .qa-rebalanced-grid > .qa-quality-card {
+          min-height: 0;
+        }
+      }
+    </style>
+  </head>
+  <body class="quality-page">
+    <header class="quality-topbar">
+      <a class="quality-brand" href="/" aria-label="HR Mind AI assistant home"
+        ><span class="quality-brand-mark">H</span><span>HR Mind AI</span></a
+      >
+      <nav class="quality-top-actions" aria-label="Dashboard navigation">
+        <a href="/documents">Document management</a>
+        <a href="/">Back to assistant</a>
+      </nav>
+    </header>
+    <main class="quality-shell">
+      <section class="quality-hero">
+        <div>
+          <p class="quality-eyebrow">PRODUCT INSIGHTS</p>
+          <h1>Answer Quality</h1>
+          <p class="quality-intro">
+            Understand whether answers help, where citations are used, and which
+            topics need stronger knowledge coverage.
+          </p>
         </div>
-        <p class="quality-panel-description">These are operational signals, not an AI verdict on factual correctness. No synthetic ratings or feedback are included.</p>
-        <div id="qualityInsights" class="quality-insights-grid"><div class="quality-empty">Insights will appear when the dashboard data loads.</div></div>
+        <div class="quality-hero-controls">
+          <label for="qualityRange">Reporting period</label
+          ><select id="qualityRange">
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="90">Last 90 days</option></select
+          ><button id="qualityRefresh" type="button">Refresh data</button>
+        </div>
       </section>
-      <section class="quality-grid">
-        <article class="quality-panel quality-panel-wide"><div class="quality-panel-heading"><div><p class="quality-eyebrow">VOLUME & COVERAGE</p><h2>Daily activity</h2></div><span class="quality-muted">Per calendar day</span></div><div id="qualityTrend" class="quality-trend"><div class="quality-empty">No activity recorded yet.</div></div><div class="quality-chart-legend"><span><i class="legend-answers"></i>Answers</span><span><i class="legend-helpful"></i>Helpful ratings</span><span><i class="legend-gaps"></i>Evidence gaps</span></div></article>
-        <article class="quality-panel"><div class="quality-panel-heading"><div><p class="quality-eyebrow">TOPIC COVERAGE</p><h2>Frequently asked topics</h2></div></div><div id="qualityTopics" class="quality-topic-list"><div class="quality-empty">No topic data yet.</div></div></article>
-        <article class="quality-panel"><div class="quality-panel-heading"><div><p class="quality-eyebrow">RETRIEVAL IMPROVEMENT</p><h2>Evidence gaps</h2></div></div><p class="quality-panel-description">Topics where the assistant returned insufficient evidence or a knowledge-based answer without source citations.</p><div id="qualityGaps" class="quality-gap-list"><div class="quality-empty">No evidence gaps recorded.</div></div></article>
-        <article class="quality-panel"><div class="quality-panel-heading"><div><p class="quality-eyebrow">USER FEEDBACK</p><h2>Why answers need work</h2></div></div><div id="qualityReasons" class="quality-reason-list"><div class="quality-empty">No negative feedback yet.</div></div></article>
-        <article class="quality-panel quality-panel-wide"><div class="quality-panel-heading"><div><p class="quality-eyebrow">RECENT SIGNALS</p><h2>Recent feedback</h2></div><span class="quality-muted">Latest 20 ratings</span></div><div id="qualityRecent" class="quality-recent-list"><div class="quality-empty">No feedback submitted yet.</div></div></article>
+      <p
+        id="qualityStatus"
+        class="quality-status"
+        role="status"
+        aria-live="polite"
+      >
+        Checking administrator access…
+      </p>
+      <section
+        id="qualityDenied"
+        class="quality-denied hidden"
+        aria-live="polite"
+      >
+        <h2>Administrator access required</h2>
+        <p>
+          This dashboard contains aggregated product-quality analytics and is
+          available only to administrators.
+        </p>
+        <a href="/?next=/quality">Sign in</a>
       </section>
-      <p class="quality-privacy-note" id="qualityPrivacyNote">Analytics use topic labels and retrieval metadata; raw question and answer text are not displayed in this dashboard.</p>
-    </div>
-    <footer class="quality-footer"><a href="/documents">← Document management</a><span>Dashboard API access is enforced by the server.</span></footer>
-  </main>
-  <script src="/static/js/quality.js?v=answer-quality-20261026"></script>
+      <div id="qualityDashboard" class="hidden">
+        <section class="quality-metrics" aria-label="Answer quality metrics">
+          <article class="quality-metric">
+            <span>Answers generated</span><strong id="qTotalAnswers">—</strong
+            ><small>Signed-in answers in this period</small>
+          </article>
+          <article class="quality-metric">
+            <span>Helpfulness</span><strong id="qHelpfulness">—</strong
+            ><small id="qFeedbackResponses">Waiting for feedback</small>
+          </article>
+          <article class="quality-metric">
+            <span>Citation coverage</span
+            ><strong id="qCitationCoverage">—</strong
+            ><small>Of retrieval-based answers</small>
+          </article>
+          <article class="quality-metric">
+            <span>Source engagement</span
+            ><strong id="qSourceEngagement">—</strong
+            ><small id="qSourceEngagementDetail">Citation interactions</small>
+          </article>
+          <article class="quality-metric quality-metric-attention">
+            <span>Evidence gaps</span><strong id="qEvidenceGaps">—</strong
+            ><small id="qEvidenceGapRate">Of retrieval-based answers</small>
+          </article>
+        </section>
+        <section
+          id="qualityInsightsPanel"
+          class="quality-panel quality-insights-panel"
+          aria-labelledby="qualityInsightsTitle"
+        >
+          <div class="quality-panel-heading">
+            <div>
+              <p class="quality-eyebrow">INTERPRETED SIGNALS</p>
+              <h2 id="qualityInsightsTitle">What the data says</h2>
+            </div>
+            <span class="quality-muted">Computed from observed activity</span>
+          </div>
+          <p class="quality-panel-description">
+            These are operational signals, not an AI verdict on factual
+            correctness. No synthetic ratings or feedback are included.
+          </p>
+          <div id="qualityInsights" class="quality-insights-grid">
+            <div class="quality-empty">
+              Insights will appear when the dashboard data loads.
+            </div>
+          </div>
+        </section>
+        <section class="quality-grid">
+          <article class="quality-panel quality-panel-wide">
+            <div class="quality-panel-heading">
+              <div>
+                <p class="quality-eyebrow">VOLUME & COVERAGE</p>
+                <h2>Daily activity</h2>
+              </div>
+              <span class="quality-muted">Per calendar day</span>
+            </div>
+            <div id="qualityTrend" class="quality-trend">
+              <div class="quality-empty">No activity recorded yet.</div>
+            </div>
+            <div class="quality-chart-legend">
+              <span><i class="legend-answers"></i>Answers</span
+              ><span><i class="legend-helpful"></i>Helpful ratings</span
+              ><span><i class="legend-gaps"></i>Evidence gaps</span>
+            </div>
+          </article>
+          <article class="quality-panel">
+            <div class="quality-panel-heading">
+              <div>
+                <p class="quality-eyebrow">TOPIC COVERAGE</p>
+                <h2>Frequently asked topics</h2>
+              </div>
+            </div>
+            <div id="qualityTopics" class="quality-topic-list">
+              <div class="quality-empty">No topic data yet.</div>
+            </div>
+          </article>
+          <article class="quality-panel">
+            <div class="quality-panel-heading">
+              <div>
+                <p class="quality-eyebrow">RETRIEVAL IMPROVEMENT</p>
+                <h2>Evidence gaps</h2>
+              </div>
+            </div>
+            <p class="quality-panel-description">
+              Topics where the assistant returned insufficient evidence or a
+              knowledge-based answer without source citations.
+            </p>
+            <div id="qualityGaps" class="quality-gap-list">
+              <div class="quality-empty">No evidence gaps recorded.</div>
+            </div>
+          </article>
+          <article class="quality-panel">
+            <div class="quality-panel-heading">
+              <div>
+                <p class="quality-eyebrow">USER FEEDBACK</p>
+                <h2>Why answers need work</h2>
+              </div>
+            </div>
+            <div id="qualityReasons" class="quality-reason-list">
+              <div class="quality-empty">No negative feedback yet.</div>
+            </div>
+          </article>
+          <article class="quality-panel quality-panel-wide">
+            <div class="quality-panel-heading">
+              <div>
+                <p class="quality-eyebrow">RECENT SIGNALS</p>
+                <h2>Recent feedback</h2>
+              </div>
+              <span class="quality-muted">Latest 5 ratings</span>
+            </div>
+            <div id="qualityRecent" class="quality-recent-list">
+              <div class="quality-empty">No feedback submitted yet.</div>
+            </div>
+          </article>
+        </section>
+        <p class="quality-privacy-note" id="qualityPrivacyNote">
+          Analytics use topic labels and retrieval metadata; raw question and
+          answer text are not displayed in this dashboard.
+        </p>
+      </div>
+      <footer class="quality-footer">
+        <a href="/documents">← Document management</a
+        ><span>Dashboard API access is enforced by the server.</span>
+      </footer>
+    </main>
+    <script src="/static/js/quality.js?v=answer-quality-20261026"></script>
 
-<script id="answer-quality-balanced-layout-script">
-(() => {
-  "use strict";
-  const targetDefinitions = [
-    ["topics", "Frequently asked topics"],
-    ["gaps", "Evidence gaps"],
-    ["reasons", "Why answers need work"],
-    ["recent", "Recent feedback"],
-  ];
-  const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
-  const isTargetHeading = (node) => {
-    if (!node || !/^(H1|H2|H3|H4|H5|H6)$/.test(node.tagName)) return false;
-    const value = normalize(node.textContent);
-    return targetDefinitions.some(([, label]) => value === normalize(label));
-  };
-  function locateCard(heading, allHeadings) {
-    let fallback = null;
-    for (let node = heading.parentElement, depth = 0;
-         node && node !== document.body && depth < 9;
-         node = node.parentElement, depth += 1) {
-      const targetCount = allHeadings.filter((item) => node.contains(item)).length;
-      if (targetCount !== 1) continue;
-      const className = typeof node.className === "string" ? node.className : "";
-      if (/(?:^|\s)(?:[\w-]+-)?(?:card|panel|tile|widget)(?:\s|$)/i.test(className)) {
-        return node;
-      }
-      if (!fallback && (node.tagName === "SECTION" || node.tagName === "ARTICLE")) fallback = node;
-    }
-    return fallback || heading.parentElement;
-  }
-  function commonAncestor(nodes) {
-    if (!nodes.length) return null;
-    for (let candidate = nodes[0].parentElement; candidate; candidate = candidate.parentElement) {
-      if (nodes.every((node) => candidate.contains(node))) return candidate;
-    }
-    return null;
-  }
-  function rebalance() {
-    if (document.querySelector(".qa-rebalanced-grid")) return true;
-    const headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6")).filter(isTargetHeading);
-    const found = new Map();
-    for (const [key, label] of targetDefinitions) {
-      const heading = headings.find((item) => normalize(item.textContent) === normalize(label));
-      if (!heading) return false;
-      found.set(key, {heading, card: locateCard(heading, headings)});
-    }
-    const cards = Array.from(found.values()).map((item) => item.card).filter(Boolean);
-    if (cards.length !== targetDefinitions.length || new Set(cards).size !== cards.length) return false;
-    // Do not move markup if one detected card contains another: that means the
-    // source structure did not expose four independent panels.
-    for (const outer of cards) {
-      if (cards.some((inner) => outer !== inner && outer.contains(inner))) return false;
-    }
-    const common = commonAncestor(cards);
-    if (!common) return false;
-    const directBranch = (node) => {
-      let current = node;
-      while (current.parentElement && current.parentElement !== common) current = current.parentElement;
-      return current.parentElement === common ? current : null;
-    };
-    const branches = cards.map(directBranch);
-    if (branches.some((branch) => !branch)) return false;
-    const orderedBranches = Array.from(new Set(branches));
-    const grid = document.createElement("div");
-    grid.className = "qa-rebalanced-grid";
-    grid.setAttribute("aria-label", "Answer quality analytics");
-    const firstBranch = orderedBranches.reduce((first, branch) => {
-      if (!first) return branch;
-      return first.compareDocumentPosition(branch) & Node.DOCUMENT_POSITION_PRECEDING ? branch : first;
-    }, null);
-    firstBranch.before(grid);
-    for (const [key] of targetDefinitions) {
-      const card = found.get(key).card;
-      card.classList.add("qa-quality-card");
-      card.dataset.qaCard = key;
-      grid.appendChild(card);
-    }
-    // Remove emptied former grid wrappers left behind after moving the four
-    // panels. Keep any wrapper that still contains text or meaningful elements.
-    for (const branch of orderedBranches) {
-      if (branch !== grid && branch.isConnected && !branch.textContent.trim() && branch.children.length === 0) {
-        branch.remove();
-      }
-    }
-    return true;
-  }
-  let attempts = 0;
-  const timer = window.setInterval(() => {
-    attempts += 1;
-    if (rebalance() || attempts >= 20) {
-      window.clearInterval(timer);
-      if (attempts >= 20 && !document.querySelector(".qa-rebalanced-grid")) {
-        console.warn("Answer Quality layout fix: could not safely identify all four cards; no cards were moved.");
-      }
-    }
-  }, 350);
-  rebalance();
-})();
-</script>
-</body>
+    <script id="answer-quality-balanced-layout-script">
+      (() => {
+        "use strict";
+        const targetDefinitions = [
+          ["topics", "Frequently asked topics"],
+          ["gaps", "Evidence gaps"],
+          ["reasons", "Why answers need work"],
+          ["recent", "Recent feedback"],
+        ];
+        const normalize = (value) =>
+          String(value || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+        const isTargetHeading = (node) => {
+          if (!node || !/^(H1|H2|H3|H4|H5|H6)$/.test(node.tagName))
+            return false;
+          const value = normalize(node.textContent);
+          return targetDefinitions.some(
+            ([, label]) => value === normalize(label),
+          );
+        };
+        function locateCard(heading, allHeadings) {
+          let fallback = null;
+          for (
+            let node = heading.parentElement, depth = 0;
+            node && node !== document.body && depth < 9;
+            node = node.parentElement, depth += 1
+          ) {
+            const targetCount = allHeadings.filter((item) =>
+              node.contains(item),
+            ).length;
+            if (targetCount !== 1) continue;
+            const className =
+              typeof node.className === "string" ? node.className : "";
+            if (
+              /(?:^|\s)(?:[\w-]+-)?(?:card|panel|tile|widget)(?:\s|$)/i.test(
+                className,
+              )
+            ) {
+              return node;
+            }
+            if (
+              !fallback &&
+              (node.tagName === "SECTION" || node.tagName === "ARTICLE")
+            )
+              fallback = node;
+          }
+          return fallback || heading.parentElement;
+        }
+        function commonAncestor(nodes) {
+          if (!nodes.length) return null;
+          for (
+            let candidate = nodes[0].parentElement;
+            candidate;
+            candidate = candidate.parentElement
+          ) {
+            if (nodes.every((node) => candidate.contains(node)))
+              return candidate;
+          }
+          return null;
+        }
+        function rebalance() {
+          if (document.querySelector(".qa-rebalanced-grid")) return true;
+          const headings = Array.from(
+            document.querySelectorAll("h1,h2,h3,h4,h5,h6"),
+          ).filter(isTargetHeading);
+          const found = new Map();
+          for (const [key, label] of targetDefinitions) {
+            const heading = headings.find(
+              (item) => normalize(item.textContent) === normalize(label),
+            );
+            if (!heading) return false;
+            found.set(key, { heading, card: locateCard(heading, headings) });
+          }
+          const cards = Array.from(found.values())
+            .map((item) => item.card)
+            .filter(Boolean);
+          if (
+            cards.length !== targetDefinitions.length ||
+            new Set(cards).size !== cards.length
+          )
+            return false;
+          // Do not move markup if one detected card contains another: that means the
+          // source structure did not expose four independent panels.
+          for (const outer of cards) {
+            if (cards.some((inner) => outer !== inner && outer.contains(inner)))
+              return false;
+          }
+          const common = commonAncestor(cards);
+          if (!common) return false;
+          const directBranch = (node) => {
+            let current = node;
+            while (current.parentElement && current.parentElement !== common)
+              current = current.parentElement;
+            return current.parentElement === common ? current : null;
+          };
+          const branches = cards.map(directBranch);
+          if (branches.some((branch) => !branch)) return false;
+          const orderedBranches = Array.from(new Set(branches));
+          const grid = document.createElement("div");
+          grid.className = "qa-rebalanced-grid";
+          grid.setAttribute("aria-label", "Answer quality analytics");
+          const firstBranch = orderedBranches.reduce((first, branch) => {
+            if (!first) return branch;
+            return first.compareDocumentPosition(branch) &
+              Node.DOCUMENT_POSITION_PRECEDING
+              ? branch
+              : first;
+          }, null);
+          firstBranch.before(grid);
+          for (const [key] of targetDefinitions) {
+            const card = found.get(key).card;
+            card.classList.add("qa-quality-card");
+            card.dataset.qaCard = key;
+            grid.appendChild(card);
+          }
+          // Remove emptied former grid wrappers left behind after moving the four
+          // panels. Keep any wrapper that still contains text or meaningful elements.
+          for (const branch of orderedBranches) {
+            if (
+              branch !== grid &&
+              branch.isConnected &&
+              !branch.textContent.trim() &&
+              branch.children.length === 0
+            ) {
+              branch.remove();
+            }
+          }
+          return true;
+        }
+        let attempts = 0;
+        const timer = window.setInterval(() => {
+          attempts += 1;
+          if (rebalance() || attempts >= 20) {
+            window.clearInterval(timer);
+            if (
+              attempts >= 20 &&
+              !document.querySelector(".qa-rebalanced-grid")
+            ) {
+              console.warn(
+                "Answer Quality layout fix: could not safely identify all four cards; no cards were moved.",
+              );
+            }
+          }
+        }, 350);
+        rebalance();
+      })();
+    </script>
+  </body>
 </html>
