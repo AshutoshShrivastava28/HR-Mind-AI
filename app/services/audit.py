@@ -346,7 +346,7 @@ def get_answer_quality_dashboard(days: int = 30) -> dict:
                       feedback_reason AS reason, source_used
                FROM answer_quality_events
                WHERE created_at >= ? AND feedback_rating IS NOT NULL
-               ORDER BY feedback_at DESC LIMIT 5""",
+               ORDER BY feedback_at DESC LIMIT 4""",
             (cutoff,),
         ).fetchall()
 
