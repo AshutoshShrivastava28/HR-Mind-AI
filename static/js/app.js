@@ -864,8 +864,13 @@ wrap.innerHTML = `
       const passage = passageId ? wrap.querySelector(`[id="${passageId}"]`) : null;
       if (!details || !passage) return;
 
-      const isAlreadySelected = details.dataset.viewMode === "single" && !passage.hidden;
-      syncSourcePassageGroup(details, isAlreadySelected ? "none" : "single", isAlreadySelected ? "" : passage.id);
+      const currentMode = details.dataset.viewMode || (details.open ? "all" : "none");
+      const isAlreadySelected = currentMode === "single" && !passage.hidden;
+      // Choosing a citation inside an expanded group should not collapse the other
+      // passages or change the group toggle back to its collapsed label.
+      if (currentMode !== "all") {
+        syncSourcePassageGroup(details, isAlreadySelected ? "none" : "single", isAlreadySelected ? "" : passage.id);
+      }
 
       if (!isAlreadySelected) {
         passage.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -898,7 +903,10 @@ wrap.innerHTML = `
 
     const details = group?.querySelector("details.source-passages");
     if (details && targetPassage) {
-      syncSourcePassageGroup(details, "single", targetPassage.id);
+      const currentMode = details.dataset.viewMode || (details.open ? "all" : "none");
+      if (currentMode !== "all") {
+        syncSourcePassageGroup(details, "single", targetPassage.id);
+      }
       targetPassage.scrollIntoView({ behavior: "smooth", block: "center" });
     } else {
       anchor.scrollIntoView({ behavior: "smooth", block: "center" });
