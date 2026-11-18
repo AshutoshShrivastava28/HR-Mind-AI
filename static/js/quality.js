@@ -12,20 +12,45 @@
     not_relevant: "Not relevant",
     other: "Other",
   };
-  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[c]);
+  const esc = (value) =>
+    String(value ?? "").replace(
+      /[&<>"']/g,
+      (c) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[c],
+    );
   const pct = (value) => `${Number(value || 0).toFixed(1)}%`;
   const fmtDate = (value) => {
     if (!value) return "Date unavailable";
     const d = new Date(value);
-    return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat(undefined, {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"}).format(d);
+    return Number.isNaN(d.getTime())
+      ? String(value)
+      : new Intl.DateTimeFormat(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(d);
   };
   async function api(url, options = {}) {
-    const response = await fetch(url, {credentials:"same-origin", ...options, headers:{...(options.headers || {})}});
+    const response = await fetch(url, {
+      credentials: "same-origin",
+      ...options,
+      headers: { ...(options.headers || {}) },
+    });
     let data = {};
-    try { data = await response.json(); } catch { /* No JSON body. */ }
-    if (!response.ok) throw new Error(data.detail || `Request failed (${response.status}).`);
+    try {
+      data = await response.json();
+    } catch {
+      /* No JSON body. */
+    }
+    if (!response.ok)
+      throw new Error(data.detail || `Request failed (${response.status}).`);
     return data;
   }
   function setStatus(message, isError = false) {
@@ -35,46 +60,87 @@
   function renderTrend(rows) {
     const target = $("qualityTrend");
     if (!rows?.length) {
-      target.innerHTML = '<div class="quality-empty">No activity recorded in this period yet.</div>';
+      target.innerHTML =
+        '<div class="quality-empty">No activity recorded in this period yet.</div>';
       return;
     }
     const visible = rows.slice(-14);
-    const max = Math.max(1, ...visible.map((r) => Number(r.answers || 0)));
-    target.innerHTML = visible.map((row) => {
-      const answers = Number(row.answers || 0);
-      const helpful = Number(row.helpful || 0);
-      const gaps = Number(row.evidence_gaps || 0);
-      const barHeight = (value) => value ? Math.max(4, Math.round(138 * value / max)) : 2;
-      const label = String(row.day || "").slice(5);
-      return `<div class="quality-trend-day" title="${esc(row.day)}: ${answers} answers, ${helpful} helpful ratings, ${gaps} evidence gaps"><div class="quality-trend-stack"><span class="quality-trend-bar answers" style="height:${barHeight(answers)}px"></span><span class="quality-trend-bar helpful" style="height:${barHeight(helpful)}px"></span><span class="quality-trend-bar gaps" style="height:${barHeight(gaps)}px"></span></div><span class="quality-trend-label">${esc(label)}</span></div>`;
-    }).join("");
+    const max = Math.max(
+      1,
+      ...visible.map((row) => Number(row.answers || 0)),
+    );
+    target.innerHTML = visible
+      .map((row) => {
+        const answers = Number(row.answers || 0);
+        const helpful = Number(row.helpful || 0);
+        const gaps = Number(row.evidence_gaps || 0);
+        const barHeight = (value) =>
+          value ? Math.min(138, Math.max(4, Math.round((138 * value) / max))) : 2;
+        const label = String(row.day || "").slice(5);
+        return `<div class="quality-trend-day" title="${esc(row.day)}: ${answers} answers, ${helpful} helpful ratings, ${gaps} evidence gaps"><div class="quality-trend-stack"><span class="quality-trend-bar answers" style="height:${barHeight(answers)}px"></span><span class="quality-trend-bar helpful" style="height:${barHeight(helpful)}px"></span><span class="quality-trend-bar gaps" style="height:${barHeight(gaps)}px"></span></div><span class="quality-trend-label">${esc(label)}</span></div>`;
+      })
+      .join("");
   }
   function renderTopics(rows) {
     const target = $("qualityTopics");
-    if (!rows?.length) { target.innerHTML = '<div class="quality-empty">No answer topics recorded yet.</div>'; return; }
+    if (!rows?.length) {
+      target.innerHTML =
+        '<div class="quality-empty">No answer topics recorded yet.</div>';
+      return;
+    }
     const max = Math.max(1, ...rows.map((row) => Number(row.total || 0)));
-    target.innerHTML = rows.slice(0, 8).map((row) => {
-      const total = Number(row.total || 0);
-      const helpful = Number(row.helpful_count || 0);
-      const notHelpful = Number(row.not_helpful_count || 0);
-      const gaps = Number(row.evidence_gaps || 0);
-      return `<div class="quality-topic-row"><span class="quality-topic-title">${esc(row.topic)}</span><span class="quality-topic-count">${total} answers</span><div class="quality-topic-track"><div class="quality-topic-fill" style="width:${Math.max(0, Math.min(100, total / max * 100))}%"></div></div><span class="quality-topic-sub">${helpful} helpful · ${notHelpful} needs work · ${gaps} evidence gaps</span></div>`;
-    }).join("");
+    target.innerHTML = rows
+      .slice(0, 4)
+      .map((row) => {
+        const total = Number(row.total || 0);
+        const helpful = Number(row.helpful_count || 0);
+        const notHelpful = Number(row.not_helpful_count || 0);
+        const gaps = Number(row.evidence_gaps || 0);
+        return `<div class="quality-topic-row"><span class="quality-topic-title">${esc(row.topic)}</span><span class="quality-topic-count">${total} answers</span><div class="quality-topic-track"><div class="quality-topic-fill" style="width:${Math.max(0, Math.min(100, (total / max) * 100))}%"></div></div><span class="quality-topic-sub">${helpful} helpful · ${notHelpful} needs work · ${gaps} evidence gaps</span></div>`;
+      })
+      .join("");
   }
   function renderGaps(rows) {
     const target = $("qualityGaps");
-    if (!rows?.length) { target.innerHTML = '<div class="quality-empty">No gaps matched the current rules. Test questions whose answers are absent from the uploaded policies; zero flags do not prove full coverage.</div>'; return; }
-    target.innerHTML = rows.map((row) => `<div class="quality-gap-row"><strong>${esc(row.topic)}</strong><span>${Number(row.count || 0)} gap${Number(row.count || 0) === 1 ? "" : "s"}</span></div>`).join("");
+    if (!rows?.length) {
+      target.innerHTML =
+        '<div class="quality-empty">No gaps matched the current rules. Test questions whose answers are absent from the uploaded policies; zero flags do not prove full coverage.</div>';
+      return;
+    }
+    target.innerHTML = rows
+      .map(
+        (row) =>
+          `<div class="quality-gap-row"><strong>${esc(row.topic)}</strong><span>${Number(row.count || 0)} gap${Number(row.count || 0) === 1 ? "" : "s"}</span></div>`,
+      )
+      .join("");
   }
   function renderReasons(rows) {
     const target = $("qualityReasons");
-    if (!rows?.length) { target.innerHTML = '<div class="quality-empty">No negative ratings yet. Rate new signed-in answers with “Needs work” to record genuine improvement reasons.</div>'; return; }
-    target.innerHTML = rows.map((row) => `<div class="quality-reason-row"><strong>${esc(reasonLabels[row.reason] || row.reason || "Not specified")}</strong><span>${Number(row.total || 0)}</span></div>`).join("");
+    if (!rows?.length) {
+      target.innerHTML =
+        '<div class="quality-empty">No negative ratings yet. Rate new signed-in answers with “Needs work” to record genuine improvement reasons.</div>';
+      return;
+    }
+    target.innerHTML = rows
+      .map(
+        (row) =>
+          `<div class="quality-reason-row"><strong>${esc(reasonLabels[row.reason] || row.reason || "Not specified")}</strong><span>${Number(row.total || 0)}</span></div>`,
+      )
+      .join("");
   }
   function renderRecent(rows) {
     const target = $("qualityRecent");
-    if (!rows?.length) { target.innerHTML = '<div class="quality-empty">No ratings yet. The prompt batch does not create human feedback; use the Helpful / Needs work controls under new signed-in answers.</div>'; return; }
-    target.innerHTML = rows.map((row) => `<article class="quality-recent-item"><div><div class="quality-recent-topic">${esc(row.topic)}</div><div class="quality-recent-meta">${esc(fmtDate(row.created_at))} · Source: ${esc(row.source_used || "unknown")}${row.reason ? ` · ${esc(reasonLabels[row.reason] || row.reason)}` : ""}</div></div><span class="quality-rating ${row.rating === "helpful" ? "helpful" : "not_helpful"}">${row.rating === "helpful" ? "Helpful" : "Needs work"}</span></article>`).join("");
+    if (!rows?.length) {
+      target.innerHTML =
+        '<div class="quality-empty">No ratings yet. The prompt batch does not create human feedback; use the Helpful / Needs work controls under new signed-in answers.</div>';
+      return;
+    }
+    target.innerHTML = rows
+      .map(
+        (row) =>
+          `<article class="quality-recent-item"><div><div class="quality-recent-topic">${esc(row.topic)}</div><div class="quality-recent-meta">${esc(fmtDate(row.created_at))} · Source: ${esc(row.source_used || "unknown")}${row.reason ? ` · ${esc(reasonLabels[row.reason] || row.reason)}` : ""}</div></div><span class="quality-rating ${row.rating === "helpful" ? "helpful" : "not_helpful"}">${row.rating === "helpful" ? "Helpful" : "Needs work"}</span></article>`,
+      )
+      .join("");
   }
   function renderQualityInsights(data) {
     const target = $("qualityInsights");
@@ -89,61 +155,120 @@
     const feedbackRate = Number(s.feedback_response_rate || 0);
     const engaged = Number(s.source_engaged_count || 0);
     const gaps = Number(s.evidence_gaps || 0);
-    const other = topics.find((row) => String(row.topic || "").toLowerCase() === "other hr questions");
+    const other = topics.find(
+      (row) => String(row.topic || "").toLowerCase() === "other hr questions",
+    );
     const otherCount = Number(other?.total || 0);
     const otherRate = total > 0 ? Math.round((otherCount / total) * 100) : 0;
     const countText = (value) => Number(value || 0).toLocaleString();
-    const insights = [];
+    const engagementRate = Number(s.source_engagement_rate || 0);
+    const leadingTopic = topics[0];
+    const insights = [
+      !total
+        ? {
+            tone: "neutral",
+            title: "Helpfulness feedback",
+            body: "No responses were recorded in this period, so helpfulness is not measured yet.",
+          }
+        : feedback === 0
+          ? {
+              tone: "attention",
+              title: "Helpfulness is not measured yet",
+              body: `0 of ${countText(total)} responses have a human rating. This is missing feedback, not evidence that answers are poor or good.`,
+            }
+          : {
+              tone: feedbackRate < 25 ? "attention" : "positive",
+              title: feedbackRate < 25 ? "Feedback coverage is low" : "Feedback is being collected",
+              body: `${countText(feedback)} of ${countText(total)} responses are rated (${feedbackRate}%). Treat this as a quality signal with the coverage in mind.`,
+            },
+      retrieval === 0
+        ? {
+            tone: "neutral",
+            title: "Citation coverage",
+            body: "No retrieval-based responses were recorded in this period.",
+          }
+        : {
+            tone: citationRate >= 90 ? "positive" : "attention",
+            title: citationRate >= 90 ? "Citation presence is strong" : "Review citation coverage",
+            body: `${countText(cited)} of ${countText(retrieval)} retrieval-based responses include citations (${citationRate}%). This measures presence, not whether a citation supports the answer.`,
+          },
+      cited === 0
+        ? {
+            tone: "neutral",
+            title: "Source engagement",
+            body: "No cited responses are available to measure source opens in this period.",
+          }
+        : {
+            tone: engaged === 0 ? "attention" : "neutral",
+            title: engaged === 0 ? "No source opens recorded" : "Source engagement",
+            body: `${countText(engaged)} of ${countText(cited)} cited responses recorded a source open (${engagementRate}%). Use this alongside ratings.`,
+          },
+      total === 0
+        ? {
+            tone: "neutral",
+            title: "Response topics",
+            body: "Topic signals will appear here as responses are recorded.",
+          }
+        : !leadingTopic
+          ? {
+              tone: "neutral",
+              title: "Response topics",
+              body: "No topic labels were recorded for responses in this period.",
+            }
+          : otherRate >= 20
+            ? {
+                tone: "attention",
+                title: "Many responses use the broad topic label",
+                body: `${countText(otherCount)} of ${countText(total)} responses (${otherRate}%) are labelled “Other HR questions”. Review topic coverage for these responses.`,
+              }
+            : {
+                tone: "neutral",
+                title: `Leading topic: ${leadingTopic.topic}`,
+                body: `${countText(leadingTopic.total)} of ${countText(total)} responses fall in this topic. ${topics.length} topic groups were recorded in this period.`,
+              },
+      retrieval === 0
+        ? {
+            tone: "neutral",
+            title: "Evidence gaps",
+            body: "No retrieval-based responses were recorded to assess evidence coverage.",
+          }
+        : gaps === 0
+          ? {
+              tone: "neutral",
+              title: "No evidence gaps flagged",
+              body: `0 of ${countText(retrieval)} retrieval-based responses matched the current gap rules. This does not prove policy coverage is complete.`,
+            }
+          : {
+              tone: "attention",
+              title: "Evidence gaps need review",
+              body: `${countText(gaps)} response${gaps === 1 ? " was" : "s were"} flagged. Review the gap topics and add or clarify authoritative policy content where appropriate.`,
+            },
+    ];
 
-    if (!total) {
-      insights.push({ tone: "neutral", title: "No activity in this period", body: "Run a small set of signed-in questions, then refresh the dashboard to generate operational insights." });
-    } else if (!feedback) {
-      insights.push({ tone: "attention", title: "Helpfulness is not measured yet", body: `0 of ${countText(total)} answers have a human rating. The 0% helpfulness figure is a missing-feedback signal, not evidence that answers are poor or good.` });
-    } else if (feedbackRate < 25) {
-      insights.push({ tone: "attention", title: "Feedback coverage is low", body: `${countText(feedback)} of ${countText(total)} answers are rated (${feedbackRate}%). Collect more ratings before using helpfulness as a reliable quality measure.` });
-    } else {
-      insights.push({ tone: "positive", title: "Feedback is being collected", body: `${countText(feedback)} of ${countText(total)} answers have a rating (${feedbackRate}%). Review topic-level results before drawing broad conclusions.` });
-    }
-
-    if (retrieval > 0 && citationRate >= 90) {
-      insights.push({ tone: "positive", title: "Citation presence is strong", body: `${countText(cited)} of ${countText(retrieval)} retrieval-based answers include citations (${citationRate}%). This measures citation presence, not whether the cited policy supports the answer.` });
-    } else if (retrieval > 0) {
-      insights.push({ tone: "attention", title: "Review citation coverage", body: `${countText(cited)} of ${countText(retrieval)} retrieval-based answers include citations (${citationRate}%). Inspect uncited answers and check whether citation rendering is working.` });
-    }
-
-    if (cited > 0 && engaged === 0) {
-      insights.push({ tone: "attention", title: "No source-open events recorded", body: `0 of ${countText(cited)} cited answers triggered a source-open event. Check the citation click-tracking path and test it in the chat UI; this may be an instrumentation or usage issue.` });
-    } else if (cited > 0) {
-      const engagementRate = Number(s.source_engagement_rate || 0);
-      insights.push({ tone: "neutral", title: "Source engagement", body: `${countText(engaged)} of ${countText(cited)} cited answers recorded a source open (${engagementRate}%). Use this alongside ratings, not as a standalone quality score.` });
-    }
-
-    if (total > 0 && otherRate >= 20) {
-      insights.push({ tone: "attention", title: "The topic classifier has a broad bucket", body: `${countText(otherCount)} of ${countText(total)} answers (${otherRate}%) are labelled “Other HR questions”. Consider adding categories for topics such as security, offboarding, workplace concerns and policy exceptions.` });
-    } else if (topics.length) {
-      insights.push({ tone: "neutral", title: "Topic coverage is available", body: `${topics.length} topic groups appear in this period. Compare counts with uploaded policy coverage to find areas that may need more test questions.` });
-    }
-
-    if (retrieval > 0 && gaps === 0) {
-      insights.push({ tone: "attention", title: "No evidence gaps matched current rules", body: `0 of ${countText(retrieval)} retrieval-based answers were flagged. This does not prove policy coverage is complete; test questions whose answers are deliberately absent from the uploaded HR documents.` });
-    } else if (gaps > 0) {
-      insights.push({ tone: "attention", title: "Evidence gaps need review", body: `${countText(gaps)} answer${gaps === 1 ? " was" : "s were"} flagged by the current evidence rules. Review the listed topics and add or clarify authoritative policy content where appropriate.` });
-    }
-
-    target.innerHTML = insights.map((item) => `<article class="quality-insight" data-tone="${esc(item.tone)}"><h3>${esc(item.title)}</h3><p>${esc(item.body)}</p></article>`).join("");
+    target.innerHTML = insights
+      .map(
+        (item) =>
+          `<article class="quality-insight" data-tone="${esc(item.tone)}"><h3>${esc(item.title)}</h3><p>${esc(item.body)}</p></article>`,
+      )
+      .join("");
   }
 
   function arrangeQualityColumns() {
     const grid = document.querySelector(".quality-grid");
     if (!grid || grid.dataset.qualityColumnsReady === "true") return;
-    const findPanel = (id) => document.getElementById(id)?.closest(".quality-panel");
+    const findPanel = (id) =>
+      document.getElementById(id)?.closest(".quality-panel");
     const trend = findPanel("qualityTrend");
     const topics = findPanel("qualityTopics");
     const gaps = findPanel("qualityGaps");
     const reasons = findPanel("qualityReasons");
     const recent = findPanel("qualityRecent");
     const panels = [trend, topics, gaps, reasons, recent];
-    if (panels.some((panel) => !panel) || new Set(panels).size !== panels.length) return;
+    if (
+      panels.some((panel) => !panel) ||
+      new Set(panels).size !== panels.length
+    )
+      return;
     const columns = document.createElement("div");
     columns.className = "quality-columns";
     const left = document.createElement("div");
@@ -160,22 +285,29 @@
 
   function render(data) {
     const s = data.summary || {};
-    $("qTotalAnswers").textContent = Number(s.total_answers || 0).toLocaleString();
+    $("qTotalAnswers").textContent = Number(
+      s.total_answers || 0,
+    ).toLocaleString();
     $("qHelpfulness").textContent = pct(s.helpfulness_rate);
-    $("qFeedbackResponses").textContent = `${Number(s.feedback_responses || 0)} ratings · ${pct(s.feedback_response_rate)} response rate`;
+    $("qFeedbackResponses").textContent =
+      `${Number(s.feedback_responses || 0)} ratings · ${pct(s.feedback_response_rate)} response rate`;
     $("qCitationCoverage").textContent = pct(s.citation_coverage_rate);
     $("qSourceEngagement").textContent = pct(s.source_engagement_rate);
-    $("qSourceEngagementDetail").textContent = `${Number(s.source_engaged_count || 0)} of ${Number(s.answers_with_citations || 0)} cited answers opened a source`;
-    $("qEvidenceGaps").textContent = Number(s.evidence_gaps || 0).toLocaleString();
-    $("qEvidenceGapRate").textContent = `${pct(s.evidence_gap_rate)} of ${Number(s.retrieval_answers || 0)} retrieval-based answers`;
+    $("qSourceEngagementDetail").textContent =
+      `${Number(s.source_engaged_count || 0)} of ${Number(s.answers_with_citations || 0)} cited answers opened a source`;
+    $("qEvidenceGaps").textContent = Number(
+      s.evidence_gaps || 0,
+    ).toLocaleString();
+    $("qEvidenceGapRate").textContent =
+      `${pct(s.evidence_gap_rate)} of ${Number(s.retrieval_answers || 0)} retrieval-based answers`;
     renderTrend(data.trend || []);
     renderTopics(data.topics || []);
     renderGaps(data.evidence_gaps_by_topic || []);
     renderReasons(data.feedback_reasons || []);
     renderRecent(data.recent_feedback || []);
     renderQualityInsights(data);
-    $("qualityPrivacyNote").textContent = data.privacy_note || "This view contains aggregated answer-quality metadata only.";
   }
+
   async function load() {
     const button = $("qualityRefresh");
     const previous = button.textContent;
@@ -183,9 +315,13 @@
     button.textContent = "Refreshing…";
     setStatus("Loading answer quality metrics…");
     try {
-      const data = await api(`/api/admin/answer-quality?days=${encodeURIComponent(range.value)}`);
+      const data = await api(
+        `/api/admin/answer-quality?days=${encodeURIComponent(range.value)}`,
+      );
       render(data);
-      setStatus(`Showing the last ${data.days} days. Metrics update as new signed-in answers and feedback arrive.`);
+      setStatus(
+        `Showing the last ${data.days} days. Metrics update as new signed-in answers and feedback arrive.`,
+      );
     } catch (error) {
       setStatus(error.message || "Could not load the dashboard.", true);
     } finally {
@@ -209,11 +345,18 @@
       denied.classList.remove("hidden");
       const link = denied.querySelector("a");
       if (link) link.href = "/?next=/quality";
-      setStatus(error.message || "Sign in with an administrator account to continue.", true);
+      setStatus(
+        error.message || "Sign in with an administrator account to continue.",
+        true,
+      );
     }
   }
-  $("qualityRefresh").addEventListener("click", () => { void load(); });
-  range.addEventListener("change", () => { void load(); });
+  $("qualityRefresh").addEventListener("click", () => {
+    void load();
+  });
+  range.addEventListener("change", () => {
+    void load();
+  });
   arrangeQualityColumns();
   void initialize();
 })();

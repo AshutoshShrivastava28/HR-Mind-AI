@@ -16,7 +16,8 @@
       .qa-rebalanced-grid {
         display: grid !important;
         grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-        align-items: stretch !important;
+        align-items: start !important;
+        align-content: start !important;
         gap: 20px !important;
         width: 100% !important;
         max-width: none !important;
@@ -35,6 +36,10 @@
       .qa-rebalanced-grid > .qa-quality-card[data-qa-card="recent"] {
         grid-column: auto !important;
       }
+      .qa-rebalanced-grid > .qa-quality-card[data-qa-card="reasons"],
+      .qa-rebalanced-grid > .qa-quality-card[data-qa-card="recent"] {
+        align-self: stretch !important;
+      }
       .qa-quality-card [class*="empty"],
       .qa-quality-card [class*="placeholder"] {
         box-sizing: border-box;
@@ -51,6 +56,10 @@
         }
         .qa-rebalanced-grid > .qa-quality-card {
           min-height: 0;
+        }
+        .qa-rebalanced-grid > .qa-quality-card[data-qa-card="reasons"],
+        .qa-rebalanced-grid > .qa-quality-card[data-qa-card="recent"] {
+          align-self: start !important;
         }
       }
     </style>
@@ -219,10 +228,6 @@
             </div>
           </article>
         </section>
-        <p class="quality-privacy-note" id="qualityPrivacyNote">
-          Analytics use topic labels and retrieval metadata; raw question and
-          answer text are not displayed in this dashboard.
-        </p>
       </div>
       <footer class="quality-footer">
         <a href="/documents">← Document management</a
