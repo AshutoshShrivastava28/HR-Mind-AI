@@ -758,7 +758,7 @@ wrap.innerHTML = `
   `;
 
 
-  function syncSourcePassageGroup(details, mode, activePassageId = "") {
+  function syncSourcePassageGroup(details, mode, activePassageId = "", visiblePassageIds = []) {
     if (!details) return;
     const group = details.closest(".source-group-card");
     if (!group) return;
@@ -767,27 +767,32 @@ wrap.innerHTML = `
     const badges = [...group.querySelectorAll(".source-citation-badge")];
     const summary = details.querySelector("summary[data-source-passages-toggle]");
     const count = passages.length;
+    const visiblePassageSet = new Set(visiblePassageIds);
 
     details.dataset.viewMode = mode;
     details.open = mode !== "none";
 
     passages.forEach((passage) => {
-      const visible = mode === "all" || (mode === "single" && passage.id === activePassageId);
+      const visible = mode === "all" ||
+        (mode === "single" && passage.id === activePassageId) ||
+        (mode === "custom" && visiblePassageSet.has(passage.id));
       passage.hidden = !visible;
     });
 
     badges.forEach((badge) => {
+      const passageId = badge.getAttribute("aria-controls");
       const active = mode === "all" ||
-        (mode === "single" && badge.getAttribute("aria-controls") === activePassageId);
+        (mode === "single" && passageId === activePassageId) ||
+        (mode === "custom" && visiblePassageSet.has(passageId));
       badge.setAttribute("aria-expanded", String(active));
-      const numberMatch = badge.getAttribute("aria-controls")?.match(/-(\d+)$/);
+      const numberMatch = passageId?.match(/-(\d+)$/);
       const number = numberMatch ? numberMatch[1] : "";
       badge.setAttribute("aria-label", `${active ? "Hide" : "Show"} passage ${number}`.trim());
       badge.classList.toggle("is-active", active);
     });
 
     if (summary) {
-      if (mode === "all") {
+      if (mode === "all" || mode === "custom") {
         summary.textContent = "Hide supporting passages";
         summary.setAttribute("aria-expanded", "true");
       } else if (mode === "single") {
@@ -865,10 +870,21 @@ wrap.innerHTML = `
       if (!details || !passage) return;
 
       const currentMode = details.dataset.viewMode || (details.open ? "all" : "none");
-      const isAlreadySelected = currentMode === "single" && !passage.hidden;
-      // Choosing a citation inside an expanded group should not collapse the other
-      // passages or change the group toggle back to its collapsed label.
-      if (currentMode !== "all") {
+      const isAlreadySelected = !passage.hidden;
+      if (currentMode === "all" || currentMode === "custom") {
+        const visiblePassageIds = [...details.querySelectorAll(".source-passage-item")]
+          .filter((item) => !item.hidden)
+          .map((item) => item.id);
+        const nextVisiblePassageIds = isAlreadySelected
+          ? visiblePassageIds.filter((id) => id !== passage.id)
+          : [...visiblePassageIds, passage.id];
+        syncSourcePassageGroup(
+          details,
+          nextVisiblePassageIds.length ? "custom" : "none",
+          "",
+          nextVisiblePassageIds,
+        );
+      } else {
         syncSourcePassageGroup(details, isAlreadySelected ? "none" : "single", isAlreadySelected ? "" : passage.id);
       }
 
@@ -904,7 +920,12 @@ wrap.innerHTML = `
     const details = group?.querySelector("details.source-passages");
     if (details && targetPassage) {
       const currentMode = details.dataset.viewMode || (details.open ? "all" : "none");
-      if (currentMode !== "all") {
+      if (currentMode === "custom" && targetPassage.hidden) {
+        const visiblePassageIds = [...details.querySelectorAll(".source-passage-item")]
+          .filter((item) => !item.hidden)
+          .map((item) => item.id);
+        syncSourcePassageGroup(details, "custom", "", [...visiblePassageIds, targetPassage.id]);
+      } else if (currentMode !== "all" && currentMode !== "custom") {
         syncSourcePassageGroup(details, "single", targetPassage.id);
       }
       targetPassage.scrollIntoView({ behavior: "smooth", block: "center" });
