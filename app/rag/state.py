@@ -20,6 +20,16 @@ class EvidenceGrade(BaseModel):
     )
 
 
+class ConversationMemorySummary(BaseModel):
+    summary: str = Field(
+        description=(
+            "A concise, useful summary of this conversation for future turns. "
+            "Keep explicit user context, preferences, decisions, and unresolved "
+            "follow-ups; omit sensitive personal data and unsupported inferences."
+        )
+    )
+
+
 class AgentState(TypedDict):
     user_id: NotRequired[str]
     route: NotRequired[Literal["kb", "direct", "out_of_scope"]]
@@ -34,3 +44,4 @@ class AgentState(TypedDict):
     retry_count: int
     trace: List[str]
     citations: List[dict]
+    conversation_context: NotRequired[str]

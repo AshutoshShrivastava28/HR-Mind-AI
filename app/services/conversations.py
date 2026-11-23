@@ -77,6 +77,21 @@ def init_conversation_db() -> None:
             ON conversation_messages(conversation_id, id)
         """)
         con.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_memories (
+                conversation_id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                summary TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (conversation_id)
+                    REFERENCES conversations(id)
+                    ON DELETE CASCADE
+            )
+        """)
+        con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversation_memories_owner_updated
+            ON conversation_memories(owner_id, updated_at)
+        """)
+        con.execute("""
             CREATE TABLE IF NOT EXISTS conversation_shares (
                 id TEXT PRIMARY KEY,
                 conversation_id TEXT NOT NULL,
@@ -311,6 +326,241 @@ def save_message(
         row = con.execute("SELECT last_insert_rowid() AS id").fetchone()
 
     return row["id"]
+
+
+def get_memory_context(
+    owner_id: str,
+    conversation_id: str,
+    question: str,
+    recent_limit: int = 8,
+    memory_limit: int = 5,
+) -> str:
+    """Build bounded, account-scoped context from this and prior conversations."""
+    with _connection() as con:
+        conversation = con.execute(
+            "SELECT title FROM conversations WHERE id = ? AND owner_id = ?",
+            (conversation_id, owner_id),
+        ).fetchone()
+        if conversation is None:
+            raise ValueError("Conversation not found.")
+
+        recent_rows = con.execute(
+            """
+            SELECT role, content FROM conversation_messages
+            WHERE conversation_id = ?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (conversation_id, recent_limit),
+        ).fetchall()
+        memory_rows = con.execute(
+            """
+            SELECT m.conversation_id, c.title, m.summary, m.updated_at
+            FROM conversation_memories AS m
+            JOIN conversations AS c ON c.id = m.conversation_id
+            WHERE m.owner_id = ? AND c.owner_id = ? AND m.summary <> ''
+            ORDER BY m.updated_at DESC
+            """,
+            (owner_id, owner_id),
+        ).fetchall()
+
+    recent_rows = list(reversed(recent_rows))
+    recent_text = "\n".join(
+        f"{row['role'].title()}: {str(row['content'])[:1200]}"
+        for row in recent_rows
+    )
+
+    # Rank prior conversation summaries by overlap with the new question, then
+    # include a couple of recent summaries so ongoing work can carry forward.
+    stop_words = {
+        "about", "after", "also", "and", "are", "can", "could", "for",
+        "from", "have", "how", "into", "more", "please", "that", "the",
+        "then", "this", "what", "when", "where", "which", "who", "with",
+        "would", "you", "your",
+    }
+    query_terms = {
+        token.casefold().strip(".,!?;:()[]{}\"'")
+        for token in question.split()
+        if len(token) > 2 and token.casefold() not in stop_words
+    }
+    ranked = []
+    for index, row in enumerate(memory_rows):
+        summary_terms = set(
+            token.casefold().strip(".,!?;:()[]{}\"'")
+            for token in f"{row['title']} {row['summary']}".split()
+            if len(token) > 2
+        )
+        overlap = len(query_terms & summary_terms)
+        recency_bonus = max(0, 5 - index)
+        ranked.append((overlap * 10 + recency_bonus, index, row))
+    ranked.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+
+    selected = []
+    seen = set()
+    for _, _, row in ranked:
+        if row["conversation_id"] == conversation_id or row["conversation_id"] in seen:
+            continue
+        if len(selected) >= memory_limit:
+            break
+        seen.add(row["conversation_id"])
+        selected.append(row)
+
+    sections = []
+    if selected:
+        prior = "\n".join(
+            f"- {str(row['title'])[:100]}: {str(row['summary'])[:900]}"
+            for row in selected
+        )
+        sections.append("Relevant memory from this user's other chats:\n" + prior)
+    if recent_text:
+        sections.append("Recent turns in this chat:\n" + recent_text)
+
+    current_summary = next(
+        (
+            str(row["summary"])
+            for row in memory_rows
+            if row["conversation_id"] == conversation_id
+        ),
+        "",
+    )
+    if current_summary:
+        sections.insert(0, "Earlier summary of this chat:\n" + current_summary[:1800])
+
+    return "\n\n".join(sections)[:7000]
+
+
+def get_conversation_memory(owner_id: str, conversation_id: str) -> str:
+    with _connection() as con:
+        row = con.execute(
+            """
+            SELECT m.summary
+            FROM conversation_memories AS m
+            JOIN conversations AS c ON c.id = m.conversation_id
+            WHERE m.owner_id = ? AND m.conversation_id = ? AND c.owner_id = ?
+            """,
+            (owner_id, conversation_id, owner_id),
+        ).fetchone()
+    return str(row["summary"] or "") if row else ""
+
+
+def get_recent_messages(
+    owner_id: str,
+    conversation_id: str,
+    limit: int = 12,
+) -> list[dict]:
+    with _connection() as con:
+        rows = con.execute(
+            """
+            SELECT m.role, m.content
+            FROM conversation_messages AS m
+            JOIN conversations AS c ON c.id = m.conversation_id
+            WHERE c.id = ? AND c.owner_id = ?
+            ORDER BY m.id DESC LIMIT ?
+            """,
+            (conversation_id, owner_id, limit),
+        ).fetchall()
+    return [dict(row) for row in reversed(rows)]
+
+
+def fallback_memory_summary(messages: list[dict]) -> str:
+    """Create a safe, deterministic topic summary when model summarization is unavailable."""
+    excluded_terms = (
+        "password", "passcode", "social security", "ssn", "passport",
+        "bank account", "credit card", "medical diagnosis", "health condition",
+        "therapy", "medication", "medical history",
+    )
+    greetings = {
+        "hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "bye",
+    }
+    topics = []
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        content = " ".join(str(message.get("content") or "").split())
+        if len(content) < 10 or content.casefold().strip(".!?, ") in greetings:
+            continue
+        if any(term in content.casefold() for term in excluded_terms):
+            continue
+        topics.append(content[:220])
+    if not topics:
+        return ""
+    return "Topics discussed: " + "; ".join(topics[-6:])
+
+
+def update_conversation_memory(
+    owner_id: str,
+    conversation_id: str,
+    summary: str,
+) -> bool:
+    """Save a rolling summary only if the conversation belongs to this user."""
+    summary = " ".join(str(summary or "").split())[:4000]
+    if not summary:
+        with _connection() as con:
+            cursor = con.execute(
+                """
+                DELETE FROM conversation_memories
+                WHERE conversation_id = ? AND owner_id = ?
+                """,
+                (conversation_id, owner_id),
+            )
+            return cursor.rowcount > 0
+    with _connection() as con:
+        cursor = con.execute(
+            """
+            INSERT INTO conversation_memories
+                (conversation_id, owner_id, summary, updated_at)
+            SELECT id, owner_id, ?, ? FROM conversations
+            WHERE id = ? AND owner_id = ?
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                summary = excluded.summary,
+                updated_at = excluded.updated_at
+            """,
+            (summary, _now(), conversation_id, owner_id),
+        )
+        return cursor.rowcount > 0
+
+
+def list_conversation_memories(owner_id: str) -> list[dict]:
+    # Backfill summaries for chats created before the memory feature, or when
+    # model-based summarization was unavailable. This is local and deterministic.
+    with _connection() as con:
+        missing = con.execute(
+            """
+            SELECT c.id AS conversation_id
+            FROM conversations AS c
+            LEFT JOIN conversation_memories AS m
+                ON m.conversation_id = c.id AND m.owner_id = c.owner_id
+            WHERE c.owner_id = ? AND m.conversation_id IS NULL
+            ORDER BY c.updated_at DESC
+            """,
+            (owner_id,),
+        ).fetchall()
+    for row in missing:
+        messages = get_recent_messages(owner_id, row["conversation_id"], limit=40)
+        fallback = fallback_memory_summary(messages)
+        if fallback:
+            update_conversation_memory(owner_id, row["conversation_id"], fallback)
+
+    with _connection() as con:
+        rows = con.execute(
+            """
+            SELECT c.id AS conversation_id, c.title, m.summary, m.updated_at
+            FROM conversation_memories AS m
+            JOIN conversations AS c ON c.id = m.conversation_id
+            WHERE m.owner_id = ? AND c.owner_id = ? AND m.summary <> ''
+            ORDER BY m.updated_at DESC
+            """,
+            (owner_id, owner_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def clear_conversation_memories(owner_id: str) -> int:
+    with _connection() as con:
+        cursor = con.execute(
+            "DELETE FROM conversation_memories WHERE owner_id = ?",
+            (owner_id,),
+        )
+        return cursor.rowcount
 
 
 def rename_conversation(

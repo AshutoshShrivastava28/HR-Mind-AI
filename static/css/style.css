@@ -2028,6 +2028,12 @@ textarea:focus-visible {
   margin-bottom: 12px;
 }
 
+.history-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .history-toolbar .secondary-btn,
 .history-toolbar .topbar-action {
   display: inline-flex;
@@ -2314,6 +2320,10 @@ textarea:focus-visible {
   .history-toolbar .topbar-action {
     padding: 8px 9px;
     font-size: 10px;
+  }
+
+  .history-toolbar-actions {
+    gap: 6px;
   }
 }
 
@@ -3304,6 +3314,62 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
+.memory-panel {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.memory-panel > .muted {
+  margin: 8px 0 12px;
+  line-height: 1.5;
+}
+
+.memory-panel .share-links-heading h3 {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+
+.memory-panel .share-links-heading .secondary-btn {
+  width: auto;
+  min-width: max-content;
+  flex: 0 0 auto;
+}
+
+.memory-list {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.memory-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--panel-raised, rgba(255, 255, 255, 0.025));
+}
+
+.memory-item strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.memory-item p {
+  margin: 6px 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.memory-item span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .share-links-list {
   display: grid;
   gap: 8px;
@@ -3469,7 +3535,12 @@ textarea:focus-visible {
   width: auto !important;
   min-width: 132px !important;
   max-width: 100% !important;
-  padding: 12px 20px !important;
+  min-height: 40px !important;
+  height: 40px !important;
+  margin: 0 0 8px !important;
+  padding: 0 16px !important;
+  border-radius: 9px !important;
+  font-size: 12px !important;
   white-space: nowrap !important;
   line-height: 1.3 !important;
 }

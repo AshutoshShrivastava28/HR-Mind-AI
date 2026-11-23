@@ -14,6 +14,11 @@ const newChatBtn = document.getElementById("newChatBtn");
 const historyNewChat = document.getElementById("historyNewChat");
 const closeHistory = document.getElementById("closeHistory");
 const refreshHistoryBtn = document.getElementById("refreshHistory");
+const memoryToggle = document.getElementById("memoryToggle");
+const memoryPanel = document.getElementById("memoryPanel");
+const memoryList = document.getElementById("memoryList");
+const memoryStatus = document.getElementById("memoryStatus");
+const clearMemoryBtn = document.getElementById("clearMemoryBtn");
 
 const conversationActionModal = document.getElementById(
   "conversationActionModal",
@@ -313,7 +318,7 @@ async function exportCurrentConversation() {
     const blob = await response.blob();
     const disposition = response.headers.get("Content-Disposition") || "";
     const match = disposition.match(/filename\s*=\s*"?([^";]+)"?/i);
-    const filename = match?.[1] || "hr-mind-ai-conversation.md";
+    const filename = match?.[1] || "hr-mind-ai-conversation.html";
 
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -1117,6 +1122,59 @@ async function refreshHistory(showStatus = true) {
   }
 }
 
+async function refreshMemory() {
+  memoryStatus.textContent = "Loading saved memory…";
+  memoryStatus.classList.remove("error");
+  try {
+    const data = await apiRequest("/api/memory");
+    const memories = Array.isArray(data.memories) ? data.memories : [];
+    memoryList.innerHTML = memories.length
+      ? memories
+          .map(
+            (memory) => `
+              <article class="memory-item">
+                <strong>${escapeHtml(memory.title || "Conversation")}</strong>
+                <p>Summary saved</p>
+                <span>Updated ${escapeHtml(formatDate(memory.updated_at))}</span>
+              </article>
+            `,
+          )
+          .join("")
+      : '<div class="empty">No saved memory yet. It builds as you chat.</div>';
+    memoryStatus.textContent = memories.length
+      ? `${memories.length} conversation memor${memories.length === 1 ? "y" : "ies"} saved`
+      : "Memory will appear here after a conversation.";
+  } catch (error) {
+    memoryList.innerHTML = '<div class="empty">Could not load saved memory.</div>';
+    memoryStatus.textContent = error.message || "Could not load saved memory.";
+    memoryStatus.classList.add("error");
+  }
+}
+
+memoryToggle.addEventListener("click", async () => {
+  const opening = memoryPanel.classList.contains("hidden");
+  memoryPanel.classList.toggle("hidden", !opening);
+  if (opening) await refreshMemory();
+});
+
+clearMemoryBtn.addEventListener("click", async () => {
+  if (!window.confirm("Clear saved memory summaries? Your chat history will remain.")) {
+    return;
+  }
+  clearMemoryBtn.disabled = true;
+  try {
+    const result = await apiRequest("/api/memory", { method: "DELETE" });
+    memoryList.innerHTML = '<div class="empty">No saved memory yet. It builds as you chat.</div>';
+    memoryStatus.textContent = `Cleared ${result.memories_deleted || 0} saved memor${result.memories_deleted === 1 ? "y" : "ies"}.`;
+    memoryStatus.classList.remove("error");
+  } catch (error) {
+    memoryStatus.textContent = error.message || "Could not clear saved memory.";
+    memoryStatus.classList.add("error");
+  } finally {
+    clearMemoryBtn.disabled = false;
+  }
+});
+
 function renderHistory() {
   if (!conversations.length) {
     historyList.innerHTML =
@@ -1369,7 +1427,11 @@ historyNewChat.addEventListener("click", createNewChat);
 closeHistory.addEventListener("click", closeHistoryModal);
 
 refreshHistoryBtn.addEventListener("click", () => {
-  refreshHistory().catch(() => {});
+  const refreshes = [refreshHistory()];
+  if (!memoryPanel.classList.contains("hidden")) {
+    refreshes.push(refreshMemory());
+  }
+  Promise.allSettled(refreshes);
 });
 
 historyModal.addEventListener("click", (event) => {
@@ -2428,6 +2490,9 @@ function hideTypingIndicator() {
 
 async function initializeApp() {
   currentConversationId = null;
+  memoryPanel.classList.add("hidden");
+  memoryList.innerHTML = '<div class="empty">Open Manage memory to load saved summaries.</div>';
+  memoryStatus.textContent = "";
   updateConversationToolbar();
   resetChatUI();
 
@@ -2464,6 +2529,9 @@ window.addEventListener("hrmind:loggedout", () => {
   renderTrace([], false);
   sourceUsed.textContent = "—";
   historyModal.classList.add("hidden");
+  memoryPanel.classList.add("hidden");
+  memoryList.innerHTML = "";
+  memoryStatus.textContent = "";
   uploadModal.classList.add("hidden");
   conversationActionModal.classList.add("hidden");
   shareModal.classList.add("hidden");

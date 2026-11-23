@@ -15,7 +15,11 @@ from starlette.background import BackgroundTask
 
 from app.core.config import get_settings
 from app.rag.vectorstore import add_documents, delete_vectors
-from app.rag.workflow import agent_graph, answer_guest_question
+from app.rag.workflow import (
+    agent_graph,
+    answer_guest_question,
+    summarize_conversation_memory,
+)
 from app.services.audit import (
     get_answer_quality_dashboard,
     record_answer_quality_event,
@@ -45,16 +49,22 @@ from app.services.authentication import (
 )
 from app.services.conversations import (
     create_conversation,
+    clear_conversation_memories,
     create_share_link,
     delete_conversation,
     get_conversation,
+    get_conversation_memory,
+    get_memory_context,
     get_messages,
+    get_recent_messages,
     get_shared_conversation,
     list_conversations,
+    list_conversation_memories,
     list_share_links,
     rename_conversation,
     revoke_share_link,
     save_message,
+    update_conversation_memory,
 )
 from app.services.ingestion import SUPPORTED, chunk_documents, load_file
 
@@ -97,9 +107,9 @@ class AnswerQualityFeedbackRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=40)
 
 
-def _markdown_filename(title: str) -> str:
+def _html_filename(title: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9_-]+", "-", title).strip("-_")[:60]
-    return f"{stem or 'hr-mind-ai-conversation'}.md"
+    return f"{stem or 'hr-mind-ai-conversation'}.html"
 
 
 def _citation_markdown(citation: dict) -> str:
@@ -171,6 +181,52 @@ def _conversation_as_markdown(
         lines.extend(["---", ""])
 
     return "\n".join(lines).strip() + "\n"
+
+
+def _render_safe_markdown(content: str) -> str:
+    from markdown_it import MarkdownIt
+
+    return MarkdownIt("commonmark", {"html": False}).enable("table").render(
+        str(content or "")
+    )
+
+
+def _conversation_as_html(conversation: dict, messages: list[dict]) -> str:
+    """Render exported Markdown as a standalone HTML document with real tables."""
+    from html import escape
+
+    title = str(conversation.get("title") or "HR Mind AI conversation")
+    markdown = _conversation_as_markdown(conversation, messages)
+    body = _render_safe_markdown(markdown)
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{escape(title)}</title>
+  <style>
+    :root {{ color-scheme: light; font-family: Segoe UI, Arial, sans-serif; }}
+    body {{ margin: 0; padding: 32px; background: #f4f7fa; color: #17212b; }}
+    main {{ max-width: 1000px; margin: 0 auto; padding: 32px; background: #fff; border: 1px solid #d8e0e8; border-radius: 12px; }}
+    h1 {{ margin-top: 0; }}
+    h2 {{ margin-top: 30px; padding-top: 22px; border-top: 1px solid #d8e0e8; }}
+    table {{ width: 100%; border-collapse: collapse; margin: 18px 0 24px; font-size: 14px; }}
+    th, td {{ padding: 10px 12px; border: 1px solid #cbd5df; text-align: left; vertical-align: top; }}
+    th {{ background: #eaf2f7; font-weight: 700; }}
+    tr:nth-child(even) td {{ background: #f8fafc; }}
+    blockquote {{ margin-left: 0; padding-left: 14px; border-left: 3px solid #9aabba; color: #526170; }}
+    pre {{ padding: 14px; overflow-x: auto; background: #f2f5f8; border-radius: 8px; }}
+    img {{ max-width: 100%; }}
+    a {{ color: #1263a0; overflow-wrap: anywhere; }}
+    hr {{ border: 0; border-top: 1px solid #d8e0e8; margin: 26px 0; }}
+    @media print {{ body {{ padding: 0; background: #fff; }} main {{ max-width: none; padding: 0; border: 0; }} table {{ break-inside: avoid; }} }}
+    @media (max-width: 640px) {{ body {{ padding: 12px; }} main {{ padding: 18px; }} th, td {{ padding: 7px; }} }}
+  </style>
+</head>
+<body><main>{body}</main></body>
+</html>
+"""
 
 
 def _safe_filename(filename: str | None) -> str:
@@ -355,6 +411,21 @@ def conversations(request: Request):
     return {"conversations": list_conversations(user["id"])}
 
 
+@router.get("/memory")
+def conversation_memory(request: Request):
+    """List this account's rolling conversation memories."""
+    user = get_current_user(request)
+    return {"memories": list_conversation_memories(user["id"])}
+
+
+@router.delete("/memory")
+def clear_memory(request: Request):
+    """Clear derived summaries while preserving the user's saved chat history."""
+    user = get_current_user(request)
+    deleted = clear_conversation_memories(user["id"])
+    return {"cleared": True, "memories_deleted": deleted}
+
+
 @router.post("/conversations", status_code=201)
 def new_conversation(request: Request):
     user = get_current_user(request)
@@ -400,7 +471,7 @@ def export_conversation(
     conversation_id: str,
     request: Request,
 ):
-    """Download an owned conversation as a Markdown file."""
+    """Download an owned conversation as a formatted HTML document."""
     user = get_current_user(request)
 
     conversation = get_conversation(user["id"], conversation_id)
@@ -412,12 +483,12 @@ def export_conversation(
         )
 
     messages = get_messages(user["id"], conversation_id)
-    markdown = _conversation_as_markdown(conversation, messages)
-    filename = _markdown_filename(str(conversation.get("title") or "conversation"))
+    html_document = _conversation_as_html(conversation, messages)
+    filename = _html_filename(str(conversation.get("title") or "conversation"))
 
     return Response(
-        content=markdown,
-        media_type="text/markdown; charset=utf-8",
+        content=html_document,
+        media_type="text/html; charset=utf-8",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Cache-Control": "no-store",
@@ -520,9 +591,17 @@ def read_shared_conversation(
             headers={"Cache-Control": "no-store"},
         )
 
+    messages = []
+    for message in shared.get("messages", []):
+        rendered = dict(message)
+        rendered["content_html"] = _render_safe_markdown(
+            str(rendered.get("content") or "")
+        )
+        messages.append(rendered)
+
     return {
         "conversation": shared.get("conversation", {}),
-        "messages": shared.get("messages", []),
+        "messages": messages,
         "share_created_at": shared.get("share_created_at"),
         "expires_at": shared.get("expires_at"),
     }
@@ -696,6 +775,11 @@ def chat(
         final_state = {}
 
         try:
+            conversation_context = get_memory_context(
+                user["id"],
+                conversation_id,
+                payload.question,
+            )
             save_message(
                 user["id"],
                 conversation_id,
@@ -710,7 +794,12 @@ def chat(
 
             initial = {
                 "question": payload.question,
-                "current_query": payload.question,
+                "current_query": (
+                    f"{payload.question}\n\nConversation context for follow-up resolution:\n"
+                    f"{conversation_context[-1800:]}"
+                    if conversation_context
+                    else payload.question
+                ),
                 "user_id": user["id"],
                 "kb_docs": [],
                 "web_results": "",
@@ -721,6 +810,7 @@ def chat(
                 "retry_count": 0,
                 "trace": [],
                 "citations": [],
+                "conversation_context": conversation_context,
             }
 
             for update in agent_graph.stream(
@@ -816,6 +906,27 @@ def chat(
                 trace_items,
             )
             assistant_message_saved = True
+
+            try:
+                previous_memory = get_conversation_memory(
+                    user["id"], conversation_id
+                )
+                updated_summary = summarize_conversation_memory(
+                    previous_memory,
+                    get_recent_messages(
+                        user["id"],
+                        conversation_id,
+                        limit=12 if previous_memory else 40,
+                    ),
+                )
+                update_conversation_memory(
+                    user["id"],
+                    conversation_id,
+                    updated_summary,
+                )
+            except Exception:
+                # Memory maintenance must never discard an otherwise successful answer.
+                logger.exception("Could not update conversation memory")
 
             yield json.dumps(
                 {

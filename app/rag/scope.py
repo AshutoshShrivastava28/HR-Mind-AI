@@ -148,6 +148,10 @@ _HR_SCOPE_PATTERN = re.compile(
     r"\b(?:" + "|".join(re.escape(term) for term in _HR_SCOPE_TERMS) + r")\b",
     re.IGNORECASE,
 )
+_ANNUAL_LEAVE_SCOPE_PATTERN = re.compile(
+    r"\b(?:annual|yearly)\s+leav(?:e|es)\b",
+    re.IGNORECASE,
+)
 
 OUT_OF_SCOPE_REPLY = (
     "I'm HR Mind AI, focused on HR and workplace support. I can help with "
@@ -162,4 +166,7 @@ def is_hr_related_question(question: str) -> bool:
     normalized = unicodedata.normalize("NFKC", str(question or "")).casefold()
     normalized = re.sub(r"[-_/]+", " ", normalized)
     normalized = " ".join(normalized.split())
-    return bool(_HR_SCOPE_PATTERN.search(normalized))
+    return bool(
+        _HR_SCOPE_PATTERN.search(normalized)
+        or _ANNUAL_LEAVE_SCOPE_PATTERN.search(normalized)
+    )
