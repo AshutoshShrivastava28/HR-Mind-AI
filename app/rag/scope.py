@@ -150,11 +150,10 @@ _HR_SCOPE_PATTERN = re.compile(
 )
 
 OUT_OF_SCOPE_REPLY = (
-    "I'm HR Mind AI, an HR and employee-support copilot. I can help with "
+    "I'm HR Mind AI, focused on HR and workplace support. I can help with "
     "workplace policies, leave, benefits, payroll, hiring, onboarding, "
-    "remote work, employee relations, and other HR topics. I can't answer "
-    "general facts such as population or weather. Please rephrase your question "
-    "around an HR or workplace need."
+    "remote work, and employee relations. Please ask a question related to "
+    "HR or your workplace."
 )
 
 
