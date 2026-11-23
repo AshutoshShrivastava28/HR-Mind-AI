@@ -124,6 +124,7 @@ const SOURCE_LABELS = {
 
 const TRACE_NODE_LABELS = {
   route_question: "Route question",
+  out_of_scope: "HR scope check",
   retrieve_kb: "Retrieve company and personal knowledge",
   grade_kb: "Evaluate private KB evidence",
   search_web: "Search public web with Tavily",

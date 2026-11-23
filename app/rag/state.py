@@ -6,8 +6,11 @@ from typing_extensions import NotRequired, TypedDict
 
 
 class RouteDecision(BaseModel):
-    route: Literal["kb", "direct"] = Field(
-        description=("kb for HR/policy questions; " "direct for greetings/simple chat")
+    route: Literal["kb", "direct", "out_of_scope"] = Field(
+        description=(
+            "kb for HR/workplace questions, direct for greetings/simple chat, "
+            "out_of_scope for non-HR requests"
+        )
     )
 
 
@@ -19,6 +22,7 @@ class EvidenceGrade(BaseModel):
 
 class AgentState(TypedDict):
     user_id: NotRequired[str]
+    route: NotRequired[Literal["kb", "direct", "out_of_scope"]]
     question: str
     current_query: str
     kb_docs: List[Document]

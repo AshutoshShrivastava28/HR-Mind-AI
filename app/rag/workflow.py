@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.core.config import get_settings
 from app.rag.policy_lifecycle import filter_company_policy_candidates
+from app.rag.scope import OUT_OF_SCOPE_REPLY, is_hr_related_question
 from app.rag.state import AgentState, EvidenceGrade, RouteDecision
 from app.rag.vectorstore import get_retriever
 from app.services.authentication import get_company_policy_metadata_map
@@ -156,26 +157,37 @@ def route_question(state: AgentState):
         "goodbye",
         "how are you",
         "who are you",
+        "what are you",
         "what is your name",
+        "who created you",
+        "who made you",
+        "who built you",
         "what can you do",
         "what can you help me with",
     }
 
-    route = "direct" if normalized in direct_phrases else "kb"
+    if normalized in direct_phrases:
+        route = "direct"
+    else:
+        route = "kb" if is_hr_related_question(question) else "out_of_scope"
 
     return {
-        "source_used": route,
+        "route": route,
+        "source_used": "kb" if route == "kb" else "direct",
         "trace": add_trace(
             state,
-            f"Rule-based router: {route.upper()}",
+            f"HR scope router: {route.upper()}",
         ),
     }
 
 
 def route_after_router(
     state: AgentState,
-) -> Literal["retrieve_kb", "direct_answer"]:
-    return "retrieve_kb" if state["source_used"] == "kb" else "direct_answer"
+) -> Literal["retrieve_kb", "direct_answer", "out_of_scope"]:
+    route = state.get("route", "kb")
+    if route == "out_of_scope":
+        return "out_of_scope"
+    return "retrieve_kb" if route == "kb" else "direct_answer"
 
 
 def retrieve_kb(state: AgentState):
@@ -403,6 +415,8 @@ def generate_from_web(state: AgentState):
     answer = llm().invoke(f"""
 You are an enterprise HR policy and employee support copilot.
 The private company HR knowledge base was insufficient.
+Only answer the HR or workplace-support parts of the request. Briefly decline
+any unrelated subquestion instead of answering it.
 
 Answer using only the external public evidence below.
 Clearly say this is external public information and may require HR
@@ -473,6 +487,8 @@ def generate_from_kb(state: AgentState):
     answer = llm().invoke(f"""
 You are an enterprise HR policy and employee support copilot.
 Answer ONLY from the private company HR knowledge base below.
+Only answer the HR or workplace-support parts of the request. Briefly decline
+any unrelated subquestion instead of answering it.
 Be concise, practical, respectful, and policy-grounded.
 If steps are present, present them clearly.
 Do not invent policy details.
@@ -513,7 +529,14 @@ Private KB evidence:
 
 def direct_answer(state: AgentState):
     answer = (
-        llm().invoke("Respond briefly and naturally to: " + state["question"]).content
+        llm()
+        .invoke(
+            "You are HR Mind AI, an HR and employee-support copilot. "
+            "Respond briefly and naturally to this greeting or question about "
+            "your HR-focused capabilities. Do not answer unrelated factual topics.\n"
+            + state["question"]
+        )
+        .content
     )
 
     return {
@@ -522,6 +545,18 @@ def direct_answer(state: AgentState):
         "trace": add_trace(
             state,
             "Direct response → no retrieval",
+        ),
+    }
+
+
+def out_of_scope(state: AgentState):
+    return {
+        "answer": OUT_OF_SCOPE_REPLY,
+        "source_used": "direct",
+        "citations": [],
+        "trace": add_trace(
+            state,
+            "HR scope check → non-HR request declined",
         ),
     }
 
@@ -554,6 +589,7 @@ def build_graph():
         "generate_from_kb": generate_from_kb,
         "generate_from_web": generate_from_web,
         "direct_answer": direct_answer,
+        "out_of_scope": out_of_scope,
         "insufficient": insufficient,
     }.items():
         graph.add_node(name, fn)
@@ -566,6 +602,7 @@ def build_graph():
         {
             "retrieve_kb": "retrieve_kb",
             "direct_answer": "direct_answer",
+            "out_of_scope": "out_of_scope",
         },
     )
 
@@ -596,6 +633,7 @@ def build_graph():
     graph.add_edge("generate_from_kb", END)
     graph.add_edge("generate_from_web", END)
     graph.add_edge("direct_answer", END)
+    graph.add_edge("out_of_scope", END)
     graph.add_edge("insufficient", END)
 
     return graph.compile()
@@ -714,6 +752,14 @@ def answer_guest_question(question: str) -> dict:
             "citations": [],
             "trace": ["Guest mode → conversational question handled directly"],
         }
+
+    if not is_hr_related_question(question):
+        return {
+            "answer": OUT_OF_SCOPE_REPLY,
+            "source_used": "direct_answer",
+            "citations": [],
+            "trace": ["Guest mode → non-HR request declined"],
+        }
     # Do not expose internal company policies to anonymous guests.
     internal_policy_markers = (
         "our company policy",
@@ -816,6 +862,8 @@ You are HR Mind AI, answering a guest who has not signed in.
 
 Guests can ask general HR questions without signing in. Do not tell
 guests that sign-in is required merely to discuss general HR topics.
+Answer only HR and workplace-support questions. Briefly decline any
+unrelated subquestion rather than answering it.
 
 Use ONLY the public web search evidence below. You do not have access
 to internal company documents or employee-private information.
