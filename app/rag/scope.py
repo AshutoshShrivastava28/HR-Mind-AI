@@ -40,6 +40,14 @@ _HR_SCOPE_TERMS = (
     "payroll policy",
     "sick leave policy",
     "leave",
+    "annual leaves",
+    "casual leaves",
+    "sick leaves",
+    "earned leaves",
+    "leave days",
+    "leave balance",
+    "leave entitlement",
+    "how many leaves",
     "pto",
     "paid time off",
     "paid leave",
@@ -60,6 +68,16 @@ _HR_SCOPE_TERMS = (
     "overtime",
     "payroll",
     "salary",
+    "annual pay",
+    "average pay",
+    "pay of",
+    "pay for",
+    "pay range",
+    "pay scale",
+    "pay band",
+    "base pay",
+    "gross pay",
+    "net pay",
     "wage",
     "payslip",
     "pay slip",
@@ -135,7 +153,7 @@ OUT_OF_SCOPE_REPLY = (
     "I'm HR Mind AI, an HR and employee-support copilot. I can help with "
     "workplace policies, leave, benefits, payroll, hiring, onboarding, "
     "remote work, employee relations, and other HR topics. I can't answer "
-    "general questions such as the weather. Please rephrase your question "
+    "general facts such as population or weather. Please rephrase your question "
     "around an HR or workplace need."
 )
 
